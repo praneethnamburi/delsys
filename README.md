@@ -1,11 +1,9 @@
 # delsys
 
+[![src](https://img.shields.io/badge/src-github-blue)](https://github.com/praneethnamburi/delsys)
 [![PyPI - Version](https://img.shields.io/pypi/v/delsys.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/delsys/)
-![Supported Python Versions](https://img.shields.io/static/v1?label=python&message=>=3.9&color=green)
-[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/praneethnamburi/delsys/main/LICENSE)
 [![Documentation Status](https://readthedocs.org/projects/delsys/badge/?version=latest)](https://delsys.readthedocs.io)
-[![PyPI Downloads](https://img.shields.io/pypi/dw/delsys.svg?label=PyPI%20downloads)](https://pypi.org/project/delsys/)
-[![Downloads](https://pepy.tech/badge/delsys)](https://pepy.tech/project/delsys)
+[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/praneethnamburi/delsys/main/LICENSE)
 
 *Load Delsys CSV exports into Python as `pysampled.Data` time series.*
 

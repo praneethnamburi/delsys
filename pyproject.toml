@@ -1,17 +1,14 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools_scm>=8"]
-build-backend = "setuptools.build_meta"
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
 
 [project]
 name = "delsys"
-version = "0.1.0"
-description = "Load and process Delsys CSV exports in Python."
+authors = [{ name = "Praneeth Namburi", email = "praneeth.namburi@gmail.com" }]
 readme = "README.md"
-license = { file = "LICENSE" }
-authors = [
-    { name = "Praneeth Namburi", email = "praneeth.namburi@gmail.com" },
-]
 requires-python = ">=3.9"
+license = { file = "LICENSE" }
+dynamic = ["version", "description"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -45,10 +42,33 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/praneethnamburi/delsys"
+Documentation = "https://delsys.readthedocs.io"
 Issues = "https://github.com/praneethnamburi/delsys/issues"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+# Tell flit the package lives under src/ rather than at repo root.
+[tool.flit.module]
+name = "delsys"
+
+[tool.flit.sdist]
+include = ["CHANGELOG.md", "examples/", "tests/"]
+exclude = [
+    "tests/fixtures/*_dropped_samples.txt",
+    "tests/fixtures/*_ekginfo.json",
+    "tests/fixtures/*_ica_settings.json",
+]
+
+[tool.coverage.run]
+source = ["delsys"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
 
 [tool.black]
 line-length = 100

@@ -2,6 +2,44 @@
 
 Items deferred during the initial standalone-package extraction.
 
+## Coverage snapshot (2026-05-09)
+
+Recorded after Phase E. Overall **81% line / 74% branch** across 766 statements.
+Treat as informational — the user's direction was *measure-and-report only* for
+0.1.0; no new tests were written to chase numbers.
+
+| Module | Line cov | Branch cov | Note |
+|---|---|---|---|
+| `__init__.py` | 100% | n/a | Re-exports + module docstring. |
+| `_constants.py` | 100% | n/a | Constants only. |
+| `_metadata.py` | 100% | n/a | Three namedtuples. |
+| `signals.py` | 96% | 98% | Sensor / shape / column properties exercised by F3. |
+| `_parse.py` | 95% | 93% | Three uncovered branches: `_fix_corrupted_sensor_names` early-return for empty replace dict, an EMGworks edge case, two link-parser error paths. |
+| `sensor.py` | 90% | 90% | Uncovered: `Sensor.get_signal()` priority-sequence walk (lines 122–126). |
+| `ekg.py` | 81% | 73% | Uncovered: `process_nk` (no integration test), `get_features_hp` (no integration test), `_get_t_noisy_segments` non-empty branch, `flip_signal` re-detection on already-flipped signal. |
+| `emg.py` | 80% | 80% | Uncovered: `_freq_funcs` lambdas (the freq-domain feature dict only verified by key, not by per-feature value), `process_nk`, `get_features_nk`. |
+| `_util.py` | 78% | 60% | Uncovered: the `EMG`-prefix early-return path of `_mod_to_attr` is exercised only by lower-case input; uppercase input not directly tested. |
+| **`log.py`** | **57%** | **47%** | Biggest gap. Uncovered: `__getitem__` / `_getitem_onekey` legacy lookup (lines 437–473), `export_to_csv` (603–633), several `find()` branches (501–530), the `_combine_signal_sensor_info` error path with the channelmap-mismatch traceback (256–260). |
+
+Follow-ups (deferred to 0.1.1+):
+
+- **`log.py` coverage push.** The legacy `__getitem__` and `export_to_csv`
+  paths are public surface — a few targeted tests would close the biggest
+  branch-coverage gap. The legacy bracket lookup is a candidate for
+  deprecation, so test value depends on whether we plan to keep or remove
+  it.
+- **`emg.py` / `ekg.py` NeuroKit-backed features.** `process_nk`,
+  `get_features_nk`, `process_nk` (EKG), `get_features_hp` are uncovered.
+  These wrap upstream libraries; tests would mostly verify the dict-shape
+  contract.
+
+To regenerate this snapshot::
+
+    pytest --cov
+
+(Source filter, branch tracking, and exclude rules live in
+`[tool.coverage.run]` / `[tool.coverage.report]` in `pyproject.toml`.)
+
 ## Post-0.1.0 roadmap
 
 - **EMG/EKG artifact cleaning at the `Log` level.** Port `C:\dev\pn-projects\projects\emg_ica_cleaning.py` (multi-stage pipeline: harmonization → preprocess → ICA-based ECG suppression with auto-component-detection by lagged correlation → ACC-guided motion regression with safety gates) into `delsys` as a `Log.clean_emg_ekg_artifact(...)` method. The integration work is to (a) gather all EMG `Signal`s + the EKG `Signal` (and optional per-EMG ACC predictors) from `lf`, (b) run the pipeline, (c) splice cleaned samples back into `lf.signals` per channel and rebuild affected `EMG` bundles in `lf.sensors[*].emg`, since `EMG._sig` is constructed by stacking signals at `Sensor.__init__` time. The previous ACC-only `ica.py` was removed in 0.1.0 because it didn't serve this stated primary purpose.

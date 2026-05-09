@@ -41,6 +41,10 @@ existing callers continue to work without code changes.
 
 ### Changed
 
+- **Minimum Python is now 3.10** (was 3.9). Bumped because a required
+  dependency (`neurokit2`) ships PEP 604 union syntax (``X | None``) at
+  module-import time, which fails on 3.9. Python 3.9 itself reached
+  end-of-life in October 2025.
 - **Bug fix:** `VO2Master` column ordering — all 8 channel properties used
   to map to column 1; now correctly map to columns 0..7 per
   `SUBCHANNEL_MAP['VO2']`.

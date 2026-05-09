@@ -47,3 +47,6 @@ samples/
 
 # Transient resume notes from assistant sessions
 RESUME.md
+
+# Maintainer-only release runbook
+PUBLISH.md

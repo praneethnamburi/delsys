@@ -1,19 +1,24 @@
 """Synthetic-signal tests for ``EMG``: envelope extraction, TKEO, feature dicts."""
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from delsys import EMG, SensorInfo
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _emg_sensor():
     return SensorInfo(
-        name="emg1", modalities={"EMGS"}, number=1,
-        type_sensorlog=None, lrc="C", location="Bicep",
+        name="emg1",
+        modalities={"EMGS"},
+        number=1,
+        type_sensorlog=None,
+        lrc="C",
+        location="Bicep",
     )
 
 
@@ -31,6 +36,7 @@ def _sine_burst_emg(sr=2000.0, dur=2.0, burst=(0.5, 1.5), freq=100.0, amp=0.3, n
 # ---------------------------------------------------------------------------
 # .process — envelope2 should highlight the burst region
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def burst_emg():
@@ -56,9 +62,9 @@ def test_emg_process_burst_region_has_higher_amplitude(burst_emg):
     burst_mask = (env.t >= 0.7) & (env.t < 1.3)
     silence_mean = e[silence_mask].mean()
     burst_mean = e[burst_mask].mean()
-    assert burst_mean > 5 * silence_mean, (
-        f"burst_mean={burst_mean:.4g} not >> silence_mean={silence_mean:.4g}"
-    )
+    assert (
+        burst_mean > 5 * silence_mean
+    ), f"burst_mean={burst_mean:.4g} not >> silence_mean={silence_mean:.4g}"
 
 
 @pytest.mark.parametrize("kind", ["envelope2", "envelope", "rms", "mean"])
@@ -90,6 +96,7 @@ def test_emg_process_lowpass_chains(burst_emg):
 # .tkeo — Teager–Kaiser energy preserves shape and sensor metadata
 # ---------------------------------------------------------------------------
 
+
 def test_tkeo_preserves_shape_and_sensor(burst_emg):
     emg, _, _ = burst_emg
     out = emg.tkeo()
@@ -110,6 +117,7 @@ def test_tkeo_zero_for_constant_signal():
 # ---------------------------------------------------------------------------
 # .get_features — temp + freq feature dictionary
 # ---------------------------------------------------------------------------
+
 
 def test_get_features_temporal_keys(burst_emg):
     """Temporal features include canonical keys (mean, rms, mav, zcr, ...)."""

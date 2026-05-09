@@ -6,6 +6,7 @@ optional lowpass), the Teager–Kaiser energy operator, and two feature
 extractors (a NeuroKit2 wrapper and a hand-rolled temporal/frequency
 feature dict).
 """
+
 from typing import Any, Callable, Dict, Optional, Union
 
 import neurokit2 as nk
@@ -116,7 +117,7 @@ class EMG(pysampled.Data):
         proc_sig12 = self.shift_baseline().bandpass(20, 500, order=order).apply(np.abs)
 
         if amp_kind == "rms":
-            rms = lambda x, ax: np.sqrt(np.mean(x ** 2, axis=ax))  # noqa: E731
+            rms = lambda x, ax: np.sqrt(np.mean(x**2, axis=ax))  # noqa: E731
             proc_sig3 = proc_sig12.apply_running_win(rms, **kwargs).resample(self.sr)
         elif amp_kind == "mean":
             proc_sig3 = proc_sig12.apply_running_win(np.mean, **kwargs).resample(self.sr)
@@ -135,12 +136,18 @@ class EMG(pysampled.Data):
 
         if lowpass:
             return self.__class__(
-                proc_sig3(), self.sr, axis=self.axis, t0=proc_sig3._t0,
+                proc_sig3(),
+                self.sr,
+                axis=self.axis,
+                t0=proc_sig3._t0,
                 history=proc_sig3._history + [("preprocess_emg", amp_kind)],
                 meta=new_meta,
             ).lowpass(lowpass, order=order)
         return self.__class__(
-            proc_sig3(), self.sr, axis=self.axis, t0=proc_sig3._t0,
+            proc_sig3(),
+            self.sr,
+            axis=self.axis,
+            t0=proc_sig3._t0,
             history=proc_sig3._history + [("preprocess_emg", amp_kind)],
             meta=new_meta,
         )
@@ -192,7 +199,7 @@ class EMG(pysampled.Data):
                 # Override defaults for hardware with narrower bandwidth:
                 envelope = lf.emg[0].rms(bandpass_high=450)
         """
-        _rms = lambda x, ax: np.sqrt(np.mean(x ** 2))  # noqa: E731
+        _rms = lambda x, ax: np.sqrt(np.mean(x**2))  # noqa: E731
         filtered = (
             self.shift_baseline()
             .highpass(bandpass_low)
@@ -200,7 +207,9 @@ class EMG(pysampled.Data):
             .notch(power_line_frequency)
         )
         envelope = filtered.apply_running_win(
-            _rms, win_size=win_size, win_inc=1.0 / envelope_sr,
+            _rms,
+            win_size=win_size,
+            win_inc=1.0 / envelope_sr,
         )
         # ``apply_running_win`` in pysampled constructs a plain ``Data`` and
         # doesn't carry history / meta through (the sampling rate change is the
@@ -233,12 +242,13 @@ class EMG(pysampled.Data):
             "mean": np.mean,
             "med": np.median,
             "var": np.var,
-            "rms": lambda x, ax: np.sqrt(np.mean(x ** 2, axis=ax)),
+            "rms": lambda x, ax: np.sqrt(np.mean(x**2, axis=ax)),
             "int": lambda x, ax: np.sum(np.abs(x), axis=ax),
             "mav": lambda x, ax: np.sum(np.abs(x), axis=ax) / win_size,
             "log": lambda x, ax: np.exp(np.sum(np.log10(np.abs(x))) / win_size),
             "wav": lambda x, ax: np.sum(np.abs(np.diff(x, axis=ax)), axis=ax),
-            "dsd": lambda x, ax: np.sqrt(np.sum(np.diff(x, axis=ax) ** 2, axis=ax)) / (win_size - 1),
+            "dsd": lambda x, ax: np.sqrt(np.sum(np.diff(x, axis=ax) ** 2, axis=ax))
+            / (win_size - 1),
             "zcr": lambda x, ax: len(np.where(np.diff(np.sign(x), axis=ax))[0]),
             "wamp": lambda x, ax: np.sum((np.abs(np.diff(x, axis=ax))) >= th, axis=ax),
             "myop": lambda x, ax: np.sum(x >= th, axis=ax) / len(x),
@@ -257,6 +267,7 @@ class EMG(pysampled.Data):
             to a callable ``f(x, ax) -> scalar`` suitable for
             :meth:`pysampled.Data.apply_running_win`.
         """
+
         def spect(x):
             freq = fftfreq(x.size, d=1 / sr)
             power = (np.abs(fft(x)) ** 2).flatten()
@@ -274,9 +285,11 @@ class EMG(pysampled.Data):
             "vap": lambda x, ax: np.var(spect(x)[1], axis=ax),
             "mnf": lambda x, ax: np.mean(spect(x)[0], axis=ax),
             "vaf": lambda x, ax: np.var(spect(x)[0], axis=ax),
-            "mwf": lambda x, ax: np.sum(spect(x)[0] * spect(x)[1], axis=ax) / np.sum(spect(x)[1], axis=ax),
+            "mwf": lambda x, ax: np.sum(spect(x)[0] * spect(x)[1], axis=ax)
+            / np.sum(spect(x)[1], axis=ax),
             "mav": lambda x, ax: spect(x)[0][
-                np.searchsorted(np.cumsum(spect(x)[1]), np.sum(spect(x)[1]) * 0.5)],
+                np.searchsorted(np.cumsum(spect(x)[1]), np.sum(spect(x)[1]) * 0.5)
+            ],
             "pkf": lambda x, ax: spect(x)[0][spect(x)[1].argmax()],
         }
         return funcs

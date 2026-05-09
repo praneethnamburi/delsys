@@ -13,8 +13,8 @@ Living in their own module avoids circular imports between ``signals.py``
 (which needs ``SensorInfo`` for ``Signal``) and ``sensor.py`` (which uses
 ``Signal`` and also needs ``SensorInfo``).
 """
-from collections import namedtuple
 
+from collections import namedtuple
 
 # Manually entered sensor map record (one row per sensor in delsys_channelmap.txt).
 # ``lrc`` is one of ``'L'``, ``'R'``, ``'C'`` (left/right/center) or ``None``.

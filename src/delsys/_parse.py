@@ -10,11 +10,12 @@ all return the same tuple shape::
 
     (t_min: float, t_max: float, sr_list: List[float], signals: List[Signal])
 """
+
 import contextlib
 import csv
 import io
 import re
-from typing import Any, Dict, IO, Iterable, Iterator, List, Optional, Tuple
+from typing import IO, Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pysampled
@@ -24,7 +25,6 @@ from scipy.signal import resample
 from delsys._constants import APPLICATIONS, HR_SENSOR_NUM, VO2_SENSOR_NUM
 from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
 from delsys.signals import Signal
-
 
 # Trigno Base receives an integer number of samples per 13.5 ms frame, so
 # every sampling rate is a multiple of 1/0.0135 Hz. We round measured /
@@ -113,13 +113,9 @@ def _parse_sig_name(
         )
 
     if modality == "FSR":
-        assert subchannel in ("A", "B", "C", "D"), (
-            f"FSR subchannel {subchannel!r} not in A/B/C/D"
-        )
+        assert subchannel in ("A", "B", "C", "D"), f"FSR subchannel {subchannel!r} not in A/B/C/D"
     if modality in ("ACC", "GYRO"):
-        assert subchannel in ("X", "Y", "Z"), (
-            f"{modality} subchannel {subchannel!r} not in X/Y/Z"
-        )
+        assert subchannel in ("X", "Y", "Z"), f"{modality} subchannel {subchannel!r} not in X/Y/Z"
 
     return SigInfoDelsys(sensor_name, modality, sensor_number, subchannel)
 
@@ -186,7 +182,8 @@ def _read_sensor_log(sensor_map_file: str) -> List[SensorLog]:
         sensor_map_raw = [x.split(" - ") for x in f.read().splitlines() if x]
     return [
         SensorLog(int(x[0].split(" ")[-1]), x[1], x[2][0], x[2].rstrip())
-        for x in sensor_map_raw if len(x) > 1
+        for x in sensor_map_raw
+        if len(x) > 1
     ]
 
 
@@ -243,8 +240,7 @@ def _parse_hdr_discover(
     sensor_names = [x.strip() for x in next(reader)]
     sensor_modes = [x.strip().removeprefix("sensor mode: ") for x in next(reader)]
     hdr["sensor_name_mode"] = {
-        s_name: int(s_mode)
-        for s_name, s_mode in zip(sensor_names, sensor_modes) if s_name
+        s_name: int(s_mode) for s_name, s_mode in zip(sensor_names, sensor_modes) if s_name
     }
     # Forward-fill blank cells in the sensor-name row (each sensor only labels
     # its first column; subsequent channels of the same sensor leave it blank).
@@ -275,7 +271,9 @@ def _parse_hdr_discover(
         sampling_rates = next(reader)
         hdr["sensor_signal_names"] = [
             f"{sensor_name}: {signal_name} - ({sampling_rate.strip()})"
-            for sensor_name, signal_name, sampling_rate in zip(sensor_names, signal_names, sampling_rates)
+            for sensor_name, signal_name, sampling_rate in zip(
+                sensor_names, signal_names, sampling_rates
+            )
         ]
         hdr["skiprows"] = 7
     return hdr
@@ -356,6 +354,7 @@ def _detect_parser(hdr: Dict[str, Any], time_names: List[str]) -> str:
 # Per-channel helpers shared by the three dataframe parsers
 # ---------------------------------------------------------------------------
 
+
 def _sensors_by_number(sensors_info: Iterable[SensorInfo]) -> Dict[int, SensorInfo]:
     """Index ``sensors_info`` by sensor number for O(1) lookup inside per-channel loops."""
     return {s.number: s for s in sensors_info}
@@ -370,7 +369,9 @@ def _make_signal(
 ) -> Signal:
     """Construct a :class:`Signal` carrying its sensor / modality / subchannel in ``meta``."""
     return Signal(
-        sig_array, sr, t0=t0,
+        sig_array,
+        sr,
+        t0=t0,
         meta={
             "sensor": sensors_by_number[sig_info.sensor_number],
             "modality": sig_info.modality,
@@ -406,6 +407,7 @@ def _check_frame_count(duration: float, sr_list: List[float], n_rows: int) -> No
 # ---------------------------------------------------------------------------
 # Per-format dataframe parsers
 # ---------------------------------------------------------------------------
+
 
 def _parse_dataframe_emgworks(
     df: "Any",  # pandas.DataFrame; quoted to avoid an import-time pandas dep here
@@ -505,9 +507,15 @@ def _parse_dataframe_discover(
             _log_dropped_samples(f, d, sig_info)
             base = pysampled.Data(d, sr=sr).interpnan()
             sig_resampled = base if sr_targ is None else base.resample(sr_targ)
-            signals.append(_make_signal(
-                sig_resampled(), sig_resampled.sr, sig_info, sensors_by_number, t0,
-            ))
+            signals.append(
+                _make_signal(
+                    sig_resampled(),
+                    sig_resampled.sr,
+                    sig_info,
+                    sensors_by_number,
+                    t0,
+                )
+            )
 
     return t_min, t_max, sr_list, signals
 
@@ -569,11 +577,10 @@ def _parse_dataframe_discover_with_link(
 
                 tag_match = _LINK_NAME_TAG_RE.findall(ts_name)
                 if not tag_match:
-                    raise ValueError(
-                        f"Could not parse link-channel tag from column {ts_name!r}."
-                    )
+                    raise ValueError(f"Could not parse link-channel tag from column {ts_name!r}.")
                 time_name = next(
-                    (name for name in link_time_names if tag_match[0] in name), None,
+                    (name for name in link_time_names if tag_match[0] in name),
+                    None,
                 )
                 if time_name is None:
                     raise ValueError(
@@ -596,9 +603,15 @@ def _parse_dataframe_discover_with_link(
 
             sr_list.append(sr)
             _log_dropped_samples(f, d, sig_info)
-            signals.append(_make_signal(
-                sig_resampled(), sig_resampled.sr, sig_info, sensors_by_number, t0,
-            ))
+            signals.append(
+                _make_signal(
+                    sig_resampled(),
+                    sig_resampled.sr,
+                    sig_info,
+                    sensors_by_number,
+                    t0,
+                )
+            )
 
         _check_frame_count(duration, sr_list, len(df))
 

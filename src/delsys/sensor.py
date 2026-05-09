@@ -7,6 +7,7 @@ arrays in canonical sub-channel order, and constructs the appropriate
 modality bundle (``EMG``, ``EKG``, ``IMU``, ``FSR``, ``VO2Master``,
 ``Analog``, or ``HRStrap``) for each.
 """
+
 from typing import List, Optional, Union
 
 import numpy as np
@@ -78,8 +79,8 @@ class Sensor:
             this_signals = [s for s in signal_list if s.modality == mod]
             assert len(np.unique([len(s) for s in this_signals])) == 1  # same n_samples per channel
             assert len(set([x._t0 for x in this_signals])) == 1
-            t0, = np.unique([s._t0 for s in this_signals])
-            sr, = np.unique([s.sr for s in this_signals])
+            (t0,) = np.unique([s._t0 for s in this_signals])
+            (sr,) = np.unique([s.sr for s in this_signals])
             mod_sig_list: List[Signal] = []
             for subchannel in SUBCHANNEL_MAP[mod]:
                 mod_sig_list += [s for s in this_signals if s.subchannel == subchannel]
@@ -88,26 +89,26 @@ class Sensor:
             # Modality-aware bundles carry the SensorInfo via ``meta['sensor']``
             # so user code can ask ``ekg.sensor.location`` / ``emg.sensor.lrc``
             # etc. without walking back through Log.sensors.
-            sensor_meta = {'sensor': sensor_info}
+            sensor_meta = {"sensor": sensor_info}
 
-            if mod in ('ACC', 'GYRO'):
+            if mod in ("ACC", "GYRO"):
                 setattr(self, _mod_to_attr(mod), IMU(sig, sr, t0=t0, meta=sensor_meta))
-            elif mod == 'FSR':
+            elif mod == "FSR":
                 self.fsr = FSR(sig, sr, t0=t0, meta=sensor_meta)
-            elif mod == 'EKG':
+            elif mod == "EKG":
                 self.ekg = EKG(sig, sr, t0=t0, meta=sensor_meta)
-            elif mod == 'Analog':
+            elif mod == "Analog":
                 # Analog stays as a plain pysampled.Data for backward compatibility;
                 # users wanting metadata can find it on the parent Sensor or via
                 # ``lf.find(modality='Analog', as_='sensor')``.
                 self.analog = pysampled.Data(sig, sr, t0=t0)
-            elif mod == 'VO2':
+            elif mod == "VO2":
                 self.vo2master = VO2Master(sig, sr, t0=t0, meta=sensor_meta)
-            elif mod == 'HR':
+            elif mod == "HR":
                 # HR Strap also stays as plain pysampled.Data for now.
                 self.hrstrap = pysampled.Data(sig, sr, t0=t0)
             else:
-                assert mod.startswith('EMG')
+                assert mod.startswith("EMG")
                 self.emg = EMG(sig, sr, t0=t0, meta=sensor_meta)
 
     def get_signal(self) -> Optional[Union[EMG, EKG, pysampled.Data, FSR, VO2Master]]:
@@ -118,7 +119,7 @@ class Sensor:
         ``analog``, ``fsr``, ``vo2master``, ``hrstrap``. Returns ``None`` if
         the sensor only has IMU data (or no data at all).
         """
-        priority_sequence = ['emg', 'ekg', 'analog', 'fsr', 'vo2master', 'hrstrap']
+        priority_sequence = ["emg", "ekg", "analog", "fsr", "vo2master", "hrstrap"]
         for attr_name in priority_sequence:
             if hasattr(self, attr_name):
                 return getattr(self, attr_name)

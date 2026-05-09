@@ -1,17 +1,18 @@
 """End-to-end tests for ``delsys.Log``: loading every fixture format and
 verifying counts, modalities, and side-effects (dropped-samples report,
 pickle round-trip)."""
+
 import pickle
 import shutil
 
 import pytest
 
-from delsys import EMG, EKG, FSR, IMU, Log, VO2Master
-
+from delsys import EKG, EMG, FSR, IMU, Log, VO2Master
 
 # ---------------------------------------------------------------------------
 # Per-fixture round-trip — every CSV format yields a Log with expected counts
 # ---------------------------------------------------------------------------
+
 
 def test_log_loads_each_fixture(sample_csv, tmp_path):
     """Every committed fixture round-trips through Log() with the expected
@@ -33,6 +34,7 @@ def test_log_loads_each_fixture(sample_csv, tmp_path):
 # ---------------------------------------------------------------------------
 # Modality content per format
 # ---------------------------------------------------------------------------
+
 
 def _load(fixtures_dir, name, tmp_path):
     """Load a fixture into a tmp dir to keep side-effect files isolated."""
@@ -80,6 +82,7 @@ def test_discover164_mvc_has_emg_and_analog(fixtures_dir, tmp_path):
 # Side-effect: dropped-samples report
 # ---------------------------------------------------------------------------
 
+
 def test_dropped_samples_report_written_for_discover(fixtures_dir, tmp_path):
     """Discover parsers write a per-channel dropped-sample report next to the CSV."""
     lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
@@ -103,6 +106,7 @@ def test_no_dropped_samples_report_for_emgworks(fixtures_dir, tmp_path):
 # Pickle round-trip
 # ---------------------------------------------------------------------------
 
+
 def test_log_pickle_roundtrip(fixtures_dir, tmp_path):
     """A loaded Log can be pickled and unpickled without losing structure."""
     lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
@@ -120,6 +124,7 @@ def test_log_pickle_roundtrip(fixtures_dir, tmp_path):
 # sensor_name_replace (Discover) — full integration via Log()
 # ---------------------------------------------------------------------------
 
+
 def test_sensor_name_replace_via_log(fixtures_dir, tmp_path):
     """``sensor_name_replace`` rewrites the prefix of combined ``"sensor: signal"``
     column headers, which propagates into ``signal.sensor_name``.
@@ -135,7 +140,7 @@ def test_sensor_name_replace_via_log(fixtures_dir, tmp_path):
     # Load once to find a real sensor name. Pick one that has the standard
     # multi-token layout so the rewritten version still parses.
     baseline = Log(str(dst))
-    candidate = next(n for n in baseline.sensor_names if len(n.split(' ')) >= 2)
+    candidate = next(n for n in baseline.sensor_names if len(n.split(" ")) >= 2)
     new_name = candidate + "_renamed"  # keeps multi-token structure intact
 
     lf = Log(str(dst), sensor_name_replace={candidate: new_name})
@@ -146,6 +151,7 @@ def test_sensor_name_replace_via_log(fixtures_dir, tmp_path):
 # ---------------------------------------------------------------------------
 # is_resampled / is_shifted / is_adjusted flags
 # ---------------------------------------------------------------------------
+
 
 def test_default_is_not_adjusted(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
@@ -175,6 +181,7 @@ def test_t0_marks_shifted(fixtures_dir, tmp_path):
 # ---------------------------------------------------------------------------
 # add_sensor_group rejects unknown sensor numbers
 # ---------------------------------------------------------------------------
+
 
 def test_add_sensor_group_validates_membership(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)

@@ -15,6 +15,7 @@ operation pysampled performs.
 The metadata namedtuples (``SensorLog`` and ``SensorInfo``) live in
 :mod:`delsys._metadata`.
 """
+
 from typing import Optional
 
 import pysampled
@@ -203,11 +204,27 @@ class VO2Master(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
-    rr = respiration_rate           = property(lambda s: s._clone(s()[:, 0], signal_names=["resp_rate"], signal_coords=["value"]))
-    td = tidal_vol                  = property(lambda s: s._clone(s()[:, 1], signal_names=["tidal_vol"], signal_coords=["value"]))
-    vent = ventilation              = property(lambda s: s._clone(s()[:, 2], signal_names=["ventilation"], signal_coords=["value"]))
-    Feo2                            = property(lambda s: s._clone(s()[:, 3], signal_names=["feo2"], signal_coords=["value"]))
-    vo2 = VO2_absolute              = property(lambda s: s._clone(s()[:, 4], signal_names=["vo2_absolute"], signal_coords=["value"]))
-    ap = ambient_pressure           = property(lambda s: s._clone(s()[:, 5], signal_names=["ambient_pressure"], signal_coords=["value"]))
-    fl = flow_sensor                = property(lambda s: s._clone(s()[:, 6], signal_names=["flow_sensor"], signal_coords=["value"]))
-    o2_hum = oxygen_sensor_humidity = property(lambda s: s._clone(s()[:, 7], signal_names=["oxygen_sensor_humidity"], signal_coords=["value"]))
+    rr = respiration_rate = property(
+        lambda s: s._clone(s()[:, 0], signal_names=["resp_rate"], signal_coords=["value"])
+    )
+    td = tidal_vol = property(
+        lambda s: s._clone(s()[:, 1], signal_names=["tidal_vol"], signal_coords=["value"])
+    )
+    vent = ventilation = property(
+        lambda s: s._clone(s()[:, 2], signal_names=["ventilation"], signal_coords=["value"])
+    )
+    Feo2 = property(lambda s: s._clone(s()[:, 3], signal_names=["feo2"], signal_coords=["value"]))
+    vo2 = VO2_absolute = property(
+        lambda s: s._clone(s()[:, 4], signal_names=["vo2_absolute"], signal_coords=["value"])
+    )
+    ap = ambient_pressure = property(
+        lambda s: s._clone(s()[:, 5], signal_names=["ambient_pressure"], signal_coords=["value"])
+    )
+    fl = flow_sensor = property(
+        lambda s: s._clone(s()[:, 6], signal_names=["flow_sensor"], signal_coords=["value"])
+    )
+    o2_hum = oxygen_sensor_humidity = property(
+        lambda s: s._clone(
+            s()[:, 7], signal_names=["oxygen_sensor_humidity"], signal_coords=["value"]
+        )
+    )

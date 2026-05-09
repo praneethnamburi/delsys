@@ -1,4 +1,5 @@
 """Pytest configuration for the delsys test suite."""
+
 from pathlib import Path
 
 import pytest
@@ -10,13 +11,13 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 # These numbers match the originals in C:/dev/immersionToolbox/_data/. They
 # were derived empirically and locked in at fixture generation time.
 SAMPLE_COUNTS = {
-    "emgworks.csv":                  (12, 69),
-    "discover142.csv":               (8, 50),
-    "discover150.csv":               (10, 64),
-    "discover164_link.csv":          (12, 46),
-    "discover164_basic.csv":         (10, 37),
-    "discover164_mvc.csv":           (9, 9),
-    "discover170.csv":               (18, 111),
+    "emgworks.csv": (12, 69),
+    "discover142.csv": (8, 50),
+    "discover150.csv": (10, 64),
+    "discover164_link.csv": (12, 46),
+    "discover164_basic.csv": (10, 37),
+    "discover164_mvc.csv": (9, 9),
+    "discover170.csv": (18, 111),
 }
 
 

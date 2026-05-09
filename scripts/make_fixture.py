@@ -12,6 +12,7 @@ Usage::
 Run with no arguments for an interactive default that produces all
 seven canonical fixtures from ``C:/dev/immersionToolbox/_data``.
 """
+
 import argparse
 import csv
 import os
@@ -34,9 +35,7 @@ def _trimmed_duration(rows_kept: int, max_sr_hz: float) -> float:
         if round(duration * max_sr_hz) == rows_kept:
             return duration
         duration += 1e-9
-    raise RuntimeError(
-        f"Could not find a duration matching {rows_kept} rows at max_sr={max_sr_hz}"
-    )
+    raise RuntimeError(f"Could not find a duration matching {rows_kept} rows at max_sr={max_sr_hz}")
 
 
 def _max_sr_from_discover_hdr(hdr) -> float:
@@ -105,20 +104,21 @@ def trim(input_path: str, output_path: str, rows: int = 1000) -> None:
 # pandas reads independently, so 200 rows is enough; Discover is a fixed grid
 # at the highest sampling rate, so we keep enough rows for ~0.1 s of data.
 _DEFAULT_BUILDS = [
-    ("emgworks.csv",
-     "C:/dev/immersionToolbox/_data/emgworks/mrs01_s009_g01_delsys_01_Rep_4.3.csv", 200),
-    ("discover142.csv",
-     "C:/dev/immersionToolbox/_data/discover142/Trial_5.csv", 250),
-    ("discover150.csv",
-     "C:/dev/immersionToolbox/_data/discover150/Trial_1.csv", 250),
-    ("discover164_link.csv",
-     "C:/dev/immersionToolbox/_data/discover164/Trial_10_ts.csv", 250),
-    ("discover164_basic.csv",
-     "C:/dev/immersionToolbox/_data/discover164/Trial_10_removeVo2.csv", 250),
-    ("discover164_mvc.csv",
-     "C:/dev/immersionToolbox/_data/discover164/MVC_1.csv", 500),
-    ("discover170.csv",
-     "C:/dev/immersionToolbox/_data/discover170/Trial_5.csv", 200),
+    (
+        "emgworks.csv",
+        "C:/dev/immersionToolbox/_data/emgworks/mrs01_s009_g01_delsys_01_Rep_4.3.csv",
+        200,
+    ),
+    ("discover142.csv", "C:/dev/immersionToolbox/_data/discover142/Trial_5.csv", 250),
+    ("discover150.csv", "C:/dev/immersionToolbox/_data/discover150/Trial_1.csv", 250),
+    ("discover164_link.csv", "C:/dev/immersionToolbox/_data/discover164/Trial_10_ts.csv", 250),
+    (
+        "discover164_basic.csv",
+        "C:/dev/immersionToolbox/_data/discover164/Trial_10_removeVo2.csv",
+        250,
+    ),
+    ("discover164_mvc.csv", "C:/dev/immersionToolbox/_data/discover164/MVC_1.csv", 500),
+    ("discover170.csv", "C:/dev/immersionToolbox/_data/discover170/Trial_5.csv", 200),
 ]
 
 

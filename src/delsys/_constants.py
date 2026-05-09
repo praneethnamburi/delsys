@@ -4,8 +4,8 @@ The metadata namedtuples (``SensorLog``, ``SensorInfo``, ``SigInfoDelsys``)
 that used to live here moved to :mod:`delsys._metadata` to avoid a circular
 import between :mod:`delsys.signals` and :mod:`delsys.sensor`.
 """
-from typing import Dict, Optional, Tuple
 
+from typing import Dict, Optional, Tuple
 
 #: Default per-modality target sampling rate (Hz) used to normalize raw signals
 #: during loading. Override by passing ``target_sr=`` to :class:`delsys.Log`.
@@ -15,12 +15,18 @@ from typing import Dict, Optional, Tuple
 #: Discover-basic and Discover-link Trigno-base parsers; not yet by the
 #: EMGworks parser or by link devices (see ``TODO.md``).
 TARGET_SR: Dict[str, Optional[float]] = {
-    "EMGS": 1920, "EMGD": 1920, "EMGQ": 1920,
-    "ACC": 120, "GYRO": 120,
-    "FSR": 120, "EKG": 120,
+    "EMGS": 1920,
+    "EMGD": 1920,
+    "EMGQ": 1920,
+    "ACC": 120,
+    "GYRO": 120,
+    "FSR": 120,
+    "EKG": 120,
     "Analog": 2400,
-    "SmO2": 5, "Thb": 5,
-    "VO2": 1, "HR": 1,
+    "SmO2": 5,
+    "Thb": 5,
+    "VO2": 1,
+    "HR": 1,
 }
 
 #: Canonical sub-channel ordering per modality. Used by :class:`delsys.Sensor`
@@ -37,8 +43,15 @@ SUBCHANNEL_MAP: Dict[str, Tuple[str, ...]] = {
     "EKG": ("A",),
     "Analog": ("A",),
     "VO2": (
-        "BreathingCycle", "Resp.Rate", "TidalVol.", "Ventilation(L/min)",
-        "FeO2(%)", "VO2Absolute", "AmbientPressure", "FlowSensor", "OxygenSensor",
+        "BreathingCycle",
+        "Resp.Rate",
+        "TidalVol.",
+        "Ventilation(L/min)",
+        "FeO2(%)",
+        "VO2Absolute",
+        "AmbientPressure",
+        "FlowSensor",
+        "OxygenSensor",
     ),
     "HR": ("HeartRate",),
 }

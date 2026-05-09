@@ -5,6 +5,7 @@ per-format parser (EMGworks, Trigno Discover basic, Trigno Discover with
 link devices), and groups the parsed signals into ``Sensor`` objects keyed
 by sensor number.
 """
+
 import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -13,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from delsys._constants import TARGET_SR
+from delsys._metadata import SensorInfo, SensorLog
 from delsys._parse import (
     _detect_parser,
     _fix_corrupted_sensor_names,
@@ -23,7 +25,6 @@ from delsys._parse import (
     _parse_sig_name,
     _read_sensor_log,
 )
-from delsys._metadata import SensorInfo, SensorLog
 from delsys._util import _mod_to_attr, _modset_to_strlist
 from delsys.sensor import Sensor
 from delsys.signals import Signal
@@ -122,7 +123,9 @@ class Log:
         self.name: str = os.path.splitext(os.path.split(fname)[1])[0]
         self.hdr: Dict[str, Any] = _parse_hdr(self.fname, self.sensor_name_replace)
 
-        df, sig_names, time_names = self._read_csv_file(self.fname, self.hdr, self.sensor_name_replace)
+        df, sig_names, time_names = self._read_csv_file(
+            self.fname, self.hdr, self.sensor_name_replace
+        )
 
         self.sensor_map: List[SensorLog] = self._parse_sensor_map(sensor_map, sig_names)
         self.signal_map, sensors_info = self._combine_signal_sensor_info(
@@ -136,19 +139,39 @@ class Log:
 
         if parser_tag == "emgworks":
             self.t_min, self.t_max, self.sr_orig, self.signals = _parse_dataframe_emgworks(
-                df, self.signal_map, sensors_info, self.target_sr,
-                sig_names, time_names, self.clock_mul, self.t0,
+                df,
+                self.signal_map,
+                sensors_info,
+                self.target_sr,
+                sig_names,
+                time_names,
+                self.clock_mul,
+                self.t0,
             )
         elif parser_tag == "discover_link":
-            self.t_min, self.t_max, self.sr_orig, self.signals = _parse_dataframe_discover_with_link(
-                df, self.signal_map, sensors_info, self.target_sr,
-                self.hdr["duration_s"], self.clock_mul, self.t0,
-                sig_names, time_names, dropped_samples_path=dropped_samples_path,
+            self.t_min, self.t_max, self.sr_orig, self.signals = (
+                _parse_dataframe_discover_with_link(
+                    df,
+                    self.signal_map,
+                    sensors_info,
+                    self.target_sr,
+                    self.hdr["duration_s"],
+                    self.clock_mul,
+                    self.t0,
+                    sig_names,
+                    time_names,
+                    dropped_samples_path=dropped_samples_path,
+                )
             )
         else:  # 'discover_basic' — TODO: confirm behavior on a file with timestamps exported.
             self.t_min, self.t_max, self.sr_orig, self.signals = _parse_dataframe_discover(
-                df, self.signal_map, sensors_info, self.target_sr,
-                self.hdr["duration_s"], self.clock_mul, self.t0,
+                df,
+                self.signal_map,
+                sensors_info,
+                self.target_sr,
+                self.hdr["duration_s"],
+                self.clock_mul,
+                self.t0,
                 dropped_samples_path=dropped_samples_path,
             )
 
@@ -189,12 +212,16 @@ class Log:
             sig_names = [c for c in column_names if "X[s]" not in c]
             assert len(time_names) == len(sig_names)
         else:  # Trigno Discover
-            df = pd.read_csv(
-                fname,
-                skiprows=hdr["skiprows"],
-                names=hdr["sensor_signal_names"],
-                skipinitialspace=True,
-            ).dropna(axis=1, how="all").dropna(axis=0, how="all")
+            df = (
+                pd.read_csv(
+                    fname,
+                    skiprows=hdr["skiprows"],
+                    names=hdr["sensor_signal_names"],
+                    skipinitialspace=True,
+                )
+                .dropna(axis=1, how="all")
+                .dropna(axis=0, how="all")
+            )
             hdr["sensor_signal_names"] = list(df)
             time_names = [c for c in hdr["sensor_signal_names"] if "Time Series" in c]
             sig_names = [c for c in hdr["sensor_signal_names"] if "Time Series" not in c]
@@ -214,10 +241,16 @@ class Log:
         string, treat it as a path to a Delsys channelmap file.
         """
         if sensor_map is None:
-            sensor_numbers = list(np.unique(
-                [_parse_sig_name(s_name, self.hdr["application"], self.target_sr).sensor_number
-                 for s_name in sig_names]
-            ))
+            sensor_numbers = list(
+                np.unique(
+                    [
+                        _parse_sig_name(
+                            s_name, self.hdr["application"], self.target_sr
+                        ).sensor_number
+                        for s_name in sig_names
+                    ]
+                )
+            )
             sensor_numbers.sort()
             sensor_map = [SensorLog(int(x), None, None, None) for x in sensor_numbers]
         elif isinstance(sensor_map, str):
@@ -258,12 +291,18 @@ class Log:
         sensors_info: List[SensorInfo] = []
         for sensor in sensor_map:
             try:
-                name, = set([x.sensor_name for x in signal_map if x.sensor_number == sensor.number])
+                (name,) = set(
+                    [x.sensor_name for x in signal_map if x.sensor_number == sensor.number]
+                )
             except ValueError as e:
                 print("Signal name mismatch in channelmap. Found these in log file:")
                 print("\n".join(list(np.unique([x.sensor_name for x in signal_map]))))
                 print("These are specified in sensor map (delsys_channelmap.txt)")
-                print("\n".join([f"{s.number} - {s.type_sensorlog} - {s.location}" for s in sensor_map]))
+                print(
+                    "\n".join(
+                        [f"{s.number} - {s.type_sensorlog} - {s.location}" for s in sensor_map]
+                    )
+                )
                 raise e
             modalities = {x.modality for x in signal_map if x.sensor_number == sensor.number}
             if sensor.type_sensorlog == "FSR":
@@ -280,7 +319,9 @@ class Log:
         """Group signals by sensor number and wrap each group in a ``Sensor``."""
         sensors: List[Sensor] = []
         for sensor_info in sensors_info:
-            sensors.append(Sensor(sensor_info, [s for s in signals if s.sensor.number == sensor_info.number]))
+            sensors.append(
+                Sensor(sensor_info, [s for s in signals if s.sensor.number == sensor_info.number])
+            )
         return sensors
 
     # ------------------------------------------------------------------
@@ -405,7 +446,9 @@ class Log:
             sensors = [s for s in sensors if name in s.name]
         if modality is not None:
             target_attr = _mod_to_attr(modality)
-            sensors = [s for s in sensors if any(_mod_to_attr(m) == target_attr for m in s.modalities)]
+            sensors = [
+                s for s in sensors if any(_mod_to_attr(m) == target_attr for m in s.modalities)
+            ]
 
         if as_ == "auto":
             as_ = "modality" if modality is not None else "sensor"
@@ -472,7 +515,11 @@ class Log:
             return [s for s in self.sensors if s.lrc == key]
 
         if key in _modset_to_strlist(self.modalities):
-            return [getattr(s, _mod_to_attr(key)) for s in self.sensors if key in _modset_to_strlist(s.modalities)]
+            return [
+                getattr(s, _mod_to_attr(key))
+                for s in self.sensors
+                if key in _modset_to_strlist(s.modalities)
+            ]
 
         if key in [s.location for s in self.sensors]:
             return [s for s in self.sensors if key in s.location]
@@ -578,7 +625,9 @@ class Log:
             if signal_name != "Time":
                 emg_dict[signal_name] = signal()[:n_samples]
 
-        save_name = os.path.join(export_dir, Path(self.fname).stem + f"_{modality}{process_name}.csv")
+        save_name = os.path.join(
+            export_dir, Path(self.fname).stem + f"_{modality}{process_name}.csv"
+        )
         print("data was saved:", save_name)
         df = pd.DataFrame.from_dict(emg_dict)
         return df.to_csv(save_name, index=None)

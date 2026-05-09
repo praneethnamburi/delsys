@@ -1,4 +1,5 @@
 """Tests for ``delsys._parse``: CSV header parsing, version detection, signal-name parsing."""
+
 import pytest
 
 from delsys._constants import HR_SENSOR_NUM, VO2_SENSOR_NUM
@@ -9,27 +10,47 @@ from delsys._parse import (
     _parse_sig_name,
 )
 
-
 # ---------------------------------------------------------------------------
 # _parse_hdr — application & version detection across all 7 fixture formats
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "fixture_name, expected",
     [
         ("emgworks.csv", {"application": "EMGworks", "skiprows": 0}),
-        ("discover142.csv", {"application": "Trigno Discover", "application_version": "1.4.2", "skiprows": 6}),
-        ("discover150.csv", {"application": "Trigno Discover", "application_version": "1.5.0", "skiprows": 7}),
-        ("discover164_link.csv", {"application": "Trigno Discover", "application_version": "1.6.4", "skiprows": 7}),
-        ("discover164_basic.csv", {"application": "Trigno Discover", "application_version": "1.6.4", "skiprows": 7}),
-        ("discover164_mvc.csv", {"application": "Trigno Discover", "application_version": "1.6.4", "skiprows": 7}),
-        ("discover170.csv", {"application": "Trigno Discover", "application_version": "1.7.0", "skiprows": 7}),
+        (
+            "discover142.csv",
+            {"application": "Trigno Discover", "application_version": "1.4.2", "skiprows": 6},
+        ),
+        (
+            "discover150.csv",
+            {"application": "Trigno Discover", "application_version": "1.5.0", "skiprows": 7},
+        ),
+        (
+            "discover164_link.csv",
+            {"application": "Trigno Discover", "application_version": "1.6.4", "skiprows": 7},
+        ),
+        (
+            "discover164_basic.csv",
+            {"application": "Trigno Discover", "application_version": "1.6.4", "skiprows": 7},
+        ),
+        (
+            "discover164_mvc.csv",
+            {"application": "Trigno Discover", "application_version": "1.6.4", "skiprows": 7},
+        ),
+        (
+            "discover170.csv",
+            {"application": "Trigno Discover", "application_version": "1.7.0", "skiprows": 7},
+        ),
     ],
 )
 def test_parse_hdr_application_and_version(fixtures_dir, fixture_name, expected):
     hdr = _parse_hdr(str(fixtures_dir / fixture_name))
     for key, value in expected.items():
-        assert hdr[key] == value, f"{fixture_name}: hdr[{key!r}] = {hdr.get(key)!r}, expected {value!r}"
+        assert (
+            hdr[key] == value
+        ), f"{fixture_name}: hdr[{key!r}] = {hdr.get(key)!r}, expected {value!r}"
 
 
 def test_parse_hdr_emgworks_minimal_keys(fixtures_dir):
@@ -54,14 +75,21 @@ def test_parse_hdr_discover_carries_metadata(fixtures_dir):
 # _parse_sig_name — column-header → SigInfoDelsys
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def trigno_target_sr():
     """A target_sr dict that covers every modality the parser may produce."""
     return {
-        "EMGS": 2000.0, "EMGD": 2000.0, "EMGQ": 2000.0,
-        "ACC": 200.0, "GYRO": 200.0,
-        "FSR": 200.0, "Analog": None, "EKG": 1259.0,
-        "VO2": None, "HR": None,
+        "EMGS": 2000.0,
+        "EMGD": 2000.0,
+        "EMGQ": 2000.0,
+        "ACC": 200.0,
+        "GYRO": 200.0,
+        "FSR": 200.0,
+        "Analog": None,
+        "EKG": 1259.0,
+        "VO2": None,
+        "HR": None,
     }
 
 
@@ -72,7 +100,9 @@ def trigno_target_sr():
         ("Analog 13 00125 (62202): Analog 1 (V)", "Analog", "A"),
     ],
 )
-def test_parse_sig_name_discover_emg_and_analog(header, expected_modality, expected_subchannel, trigno_target_sr):
+def test_parse_sig_name_discover_emg_and_analog(
+    header, expected_modality, expected_subchannel, trigno_target_sr
+):
     info = _parse_sig_name(header, "Trigno Discover", trigno_target_sr)
     assert info.modality == expected_modality
     assert info.subchannel == expected_subchannel
@@ -82,7 +112,8 @@ def test_parse_sig_name_discover_emg_and_analog(header, expected_modality, expec
 def test_parse_sig_name_vo2_link_uses_synthetic_sensor_number(trigno_target_sr):
     info = _parse_sig_name(
         "VO2 Master  (0): Resp. Rate (BrPM)",
-        "Trigno Discover", trigno_target_sr,
+        "Trigno Discover",
+        trigno_target_sr,
     )
     assert info.modality == "VO2"
     assert info.sensor_number == VO2_SENSOR_NUM
@@ -91,7 +122,8 @@ def test_parse_sig_name_vo2_link_uses_synthetic_sensor_number(trigno_target_sr):
 def test_parse_sig_name_hr_link_uses_synthetic_sensor_number(trigno_target_sr):
     info = _parse_sig_name(
         "HR Strap  (0): HR (BPM)",
-        "Trigno Discover", trigno_target_sr,
+        "Trigno Discover",
+        trigno_target_sr,
     )
     assert info.modality == "HR"
     assert info.sensor_number == HR_SENSOR_NUM
@@ -100,7 +132,8 @@ def test_parse_sig_name_hr_link_uses_synthetic_sensor_number(trigno_target_sr):
 def test_parse_sig_name_emg_quattro_tag(trigno_target_sr):
     info = _parse_sig_name(
         "Quattro 02 12345 (67890): EMG 1 (mV)",
-        "Trigno Discover", trigno_target_sr,
+        "Trigno Discover",
+        trigno_target_sr,
     )
     assert info.modality == "EMGQ"
 
@@ -108,7 +141,8 @@ def test_parse_sig_name_emg_quattro_tag(trigno_target_sr):
 def test_parse_sig_name_emg_duo_tag(trigno_target_sr):
     info = _parse_sig_name(
         "Duo 03 12345 (67890): EMG 1 (mV)",
-        "Trigno Discover", trigno_target_sr,
+        "Trigno Discover",
+        trigno_target_sr,
     )
     assert info.modality == "EMGD"
 
@@ -116,6 +150,7 @@ def test_parse_sig_name_emg_duo_tag(trigno_target_sr):
 # ---------------------------------------------------------------------------
 # _detect_parser — picks the right per-format dataframe parser
 # ---------------------------------------------------------------------------
+
 
 def test_detect_parser_emgworks(fixtures_dir):
     hdr = _parse_hdr(str(fixtures_dir / "emgworks.csv"))
@@ -147,6 +182,7 @@ def test_detect_parser_link_without_timestamps_raises(fixtures_dir):
 # ---------------------------------------------------------------------------
 # _fix_corrupted_sensor_names — repairs misspellings via prefix substitution
 # ---------------------------------------------------------------------------
+
 
 def test_fix_corrupted_sensor_names_prefix_swap():
     sig_names = ["EMG 01 corrupt: EMG 1", "EMG 02 ok: EMG 1"]

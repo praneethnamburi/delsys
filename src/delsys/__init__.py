@@ -37,6 +37,7 @@ Example:
             envelope = emg.process(amp_kind="envelope2")
         right_forearm = lf.find(side="R", location="Forearm")
 """
+
 from delsys._constants import (
     APPLICATIONS,
     HR_SENSOR_NUM,

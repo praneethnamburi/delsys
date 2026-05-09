@@ -1,20 +1,25 @@
 """Synthetic-array tests for signal classes: ``Signal``, ``IMU``, ``FSR``,
 ``VO2Master``. No fixture files required."""
+
 import numpy as np
 import pytest
 
-from delsys import FSR, IMU, Signal, SensorInfo, VO2Master
-
+from delsys import FSR, IMU, SensorInfo, Signal, VO2Master
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _sensor_info(modality_set, number=1, name="test", lrc="C", location="Hip"):
     """Build a synthetic SensorInfo for testing."""
     return SensorInfo(
-        name=name, modalities=modality_set, number=number,
-        type_sensorlog=None, lrc=lrc, location=location,
+        name=name,
+        modalities=modality_set,
+        number=number,
+        type_sensorlog=None,
+        lrc=lrc,
+        location=location,
     )
 
 
@@ -26,6 +31,7 @@ def _const_columns(n_samples, n_channels):
 # ---------------------------------------------------------------------------
 # IMU — three-axis access (X, Y, Z map to columns 0, 1, 2)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def imu():
@@ -54,6 +60,7 @@ def test_imu_axis_returns_imu_instance(imu):
 # ---------------------------------------------------------------------------
 # FSR — four-channel access (A, B, C, D map to columns 0, 1, 2, 3)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def fsr():
@@ -84,6 +91,7 @@ def test_fsr_channel_returns_fsr_instance(fsr):
 # VO2Master — eight-column ordering (regression for the original copy-paste bug)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def vo2():
     si = _sensor_info({"VO2"}, number=900, location=None)
@@ -98,23 +106,23 @@ def test_vo2master_shape(vo2):
 @pytest.mark.parametrize(
     "attr, expected_column_value",
     [
-        ("rr", 1.0),       # column 0: respiration rate
-        ("td", 2.0),       # column 1: tidal volume
-        ("vent", 3.0),     # column 2: ventilation
-        ("Feo2", 4.0),     # column 3: FeO2
-        ("vo2", 5.0),      # column 4: VO2 absolute
-        ("ap", 6.0),       # column 5: ambient pressure
-        ("fl", 7.0),       # column 6: flow sensor
-        ("o2_hum", 8.0),   # column 7: O2 sensor humidity
+        ("rr", 1.0),  # column 0: respiration rate
+        ("td", 2.0),  # column 1: tidal volume
+        ("vent", 3.0),  # column 2: ventilation
+        ("Feo2", 4.0),  # column 3: FeO2
+        ("vo2", 5.0),  # column 4: VO2 absolute
+        ("ap", 6.0),  # column 5: ambient pressure
+        ("fl", 7.0),  # column 6: flow sensor
+        ("o2_hum", 8.0),  # column 7: O2 sensor humidity
     ],
 )
 def test_vo2master_columns_in_order(vo2, attr, expected_column_value):
     """Regression: VO2Master used to map every property to column 1; this
     locks in the correct 0..7 mapping per SUBCHANNEL_MAP['VO2']."""
     val = getattr(vo2, attr)
-    assert np.allclose(val(), expected_column_value), (
-        f"VO2Master.{attr} should be {expected_column_value}, got {val().mean()}"
-    )
+    assert np.allclose(
+        val(), expected_column_value
+    ), f"VO2Master.{attr} should be {expected_column_value}, got {val().mean()}"
 
 
 @pytest.mark.parametrize(
@@ -138,6 +146,7 @@ def test_vo2master_aliases_match_canonical(vo2, alias, canonical):
 # Signal — sensor metadata round-trip + clone
 # ---------------------------------------------------------------------------
 
+
 def test_signal_records_sensor_modality_subchannel():
     si = _sensor_info({"EMGS"})
     sig = np.linspace(0, 1, 500)
@@ -152,8 +161,9 @@ def test_signal_records_sensor_modality_subchannel():
 def test_signal_clone_preserves_metadata():
     """Cloning a Signal (e.g. via filtering) keeps sensor/modality/subchannel."""
     si = _sensor_info({"EMGS"})
-    s = Signal(np.linspace(0, 1, 500), 2000.0,
-               meta={"sensor": si, "modality": "EMGS", "subchannel": "A"})
+    s = Signal(
+        np.linspace(0, 1, 500), 2000.0, meta={"sensor": si, "modality": "EMGS", "subchannel": "A"}
+    )
     s2 = s.lowpass(50)  # filtering goes through _clone
     assert isinstance(s2, Signal)
     assert s2.sensor is si

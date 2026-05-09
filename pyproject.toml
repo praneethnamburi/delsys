@@ -39,6 +39,8 @@ dependencies = [
 dev = [
     "pytest>=7",
     "pytest-cov",
+    "black",
+    "isort",
 ]
 
 [project.urls]
@@ -47,6 +49,15 @@ Issues = "https://github.com/praneethnamburi/delsys/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["delsys"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

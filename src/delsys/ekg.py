@@ -9,6 +9,7 @@ Defines :class:`EKG`, a :class:`pysampled.Data` extension that adds:
   flip flag, free-text tags).
 * Per-segment feature extraction via HeartPy.
 """
+
 import copy
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -140,7 +141,11 @@ class EKG(pysampled.Data):
         """
         win_over = float(np.clip(1 - win_inc / win_size, 0.0, 0.999))
         result = hp.process_segmentwise(
-            self().flatten(), self.sr, segment_width=win_size, segment_overlap=win_over, **kwargs,
+            self().flatten(),
+            self.sr,
+            segment_width=win_size,
+            segment_overlap=win_over,
+            **kwargs,
         )[1]
         result["time"] = [
             (round(self.t[idx[0]], 2), round(self.t[idx[1]], 2))

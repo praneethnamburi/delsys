@@ -1,11 +1,11 @@
 """Synthetic-ECG tests for ``EKG``: R-peak detection plus rate properties and
 metadata round-trip."""
+
 import neurokit2 as nk
 import numpy as np
 import pytest
 
 from delsys import EKG, SensorInfo
-
 
 # ---------------------------------------------------------------------------
 # Synthetic ECG fixture (30 s of simulated ECG at a known heart rate)
@@ -19,8 +19,12 @@ EXPECTED_PEAKS = DURATION_S * HEART_RATE_BPM / 60  # ≈ 35
 
 def _ekg_sensor():
     return SensorInfo(
-        name="ekg1", modalities={"EKG"}, number=1,
-        type_sensorlog=None, lrc="C", location="Chest",
+        name="ekg1",
+        modalities={"EKG"},
+        number=1,
+        type_sensorlog=None,
+        lrc="C",
+        location="Chest",
     )
 
 
@@ -28,8 +32,10 @@ def _ekg_sensor():
 def synthetic_ekg():
     """30 s of simulated ECG at 70 bpm — wrapped in our ``EKG`` class."""
     sig = nk.ecg_simulate(
-        duration=DURATION_S, sampling_rate=int(SR),
-        heart_rate=HEART_RATE_BPM, random_state=0,
+        duration=DURATION_S,
+        sampling_rate=int(SR),
+        heart_rate=HEART_RATE_BPM,
+        random_state=0,
     )
     sig_2d = sig.reshape(-1, 1)  # production EKG bundles are 2D
     return EKG(sig_2d, sr=SR, t0=0.0, meta={"sensor": _ekg_sensor()})
@@ -39,11 +45,16 @@ def synthetic_ekg():
 # meta initialization
 # ---------------------------------------------------------------------------
 
+
 def test_ekg_initializes_rpeak_metadata(synthetic_ekg):
     """``EKG.__init__`` populates ``self.meta`` with empty rpeak slots."""
     for key in (
-        "rpeaks_idx_default", "rpeaks_idx_removed", "rpeaks_idx_added",
-        "noisy_segments_idx", "is_flipped", "tags",
+        "rpeaks_idx_default",
+        "rpeaks_idx_removed",
+        "rpeaks_idx_added",
+        "noisy_segments_idx",
+        "is_flipped",
+        "tags",
     ):
         assert key in synthetic_ekg.meta
 
@@ -55,6 +66,7 @@ def test_ekg_preserves_sensor(synthetic_ekg):
 # ---------------------------------------------------------------------------
 # R-peak detection
 # ---------------------------------------------------------------------------
+
 
 def _peaks_per_minute(n_peaks):
     return 60 * n_peaks / DURATION_S
@@ -76,6 +88,7 @@ def test_find_rpeaks_alias_points_to_pn(synthetic_ekg):
 # hr / rr properties (HeartPy-backed)
 # ---------------------------------------------------------------------------
 
+
 def test_hr_property_matches_simulated_rate(synthetic_ekg):
     assert abs(synthetic_ekg.hr - HEART_RATE_BPM) < 5
 
@@ -91,6 +104,7 @@ def test_rr_property_returns_finite_value(synthetic_ekg):
 # ---------------------------------------------------------------------------
 # rpeak_times + ihr — instantaneous heart rate over time
 # ---------------------------------------------------------------------------
+
 
 def test_rpeak_times_returns_sorted_indices_and_idx_array(synthetic_ekg):
     """Calling ``rpeak_times`` populates default rpeaks if empty and returns a
@@ -120,6 +134,7 @@ def test_ihr_returns_finite_bpm(synthetic_ekg):
 # ---------------------------------------------------------------------------
 # flip_signal — toggles is_flipped flag and refinds peaks
 # ---------------------------------------------------------------------------
+
 
 def test_flip_signal_toggles_flag(synthetic_ekg):
     initial = synthetic_ekg.meta.get("is_flipped", False)

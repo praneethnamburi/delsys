@@ -51,3 +51,12 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # Upstream noise from heartpy / matplotlib / sklearn / etc — keep our test output readable.
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::FutureWarning",
+    "ignore::UserWarning",
+    "ignore::RuntimeWarning",
+    "ignore::sklearn.exceptions.ConvergenceWarning",
+]

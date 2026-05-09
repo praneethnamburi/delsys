@@ -2,6 +2,14 @@
 
 Items deferred during the initial standalone-package extraction.
 
+## Decorator behavior
+
+- **`decreturn` ignores wrapped-function defaults.** Methods decorated with `decreturn` (e.g. `EMG.get_features`, `EKG.get_features_hp`) declare a default `to=dict` in their signature, but the decorator reads `kwargs['to']` before calling the function and raises `KeyError` when the caller omits `to=`. Should fall back to the function's default. Caught while writing F4 tests on 2026-05-08.
+
+## Known bugs (left alone per user direction in Stage 2)
+
+- **`EKG.find_rpeaks_hp(cleaned=True)` is broken.** `ekg.py:114` calls `bisect.insort(peaks, modifier['add'])` — `modifier['add']` is a list, not a single value, and `peaks` is a numpy array (not a Python list) so `peaks.insert(...)` fails with `AttributeError: 'numpy.ndarray' object has no attribute 'insert'`. The path needs `peaks = list(peaks)` and a `for v in modifier['add']: bisect.insort(peaks, v)` loop. Confirmed via F5 tests on 2026-05-08.
+
 ## Restructure / API
 
 - **`Sensor.__init__` modality dispatch.** It uses an if/elif chain on modality strings to choose which class to instantiate. A small `MODALITY_REGISTRY` mapping `{'EMG': EMG, 'EKG': EKG, ...}` would be cleaner and would make adding modalities (e.g. SmO2/Thb that already appear in `TARGET_SR`) one-line changes.
@@ -24,11 +32,16 @@ Items deferred during the initial standalone-package extraction.
 
 - VO2Master `VO2_absolute` returns raw CSV values (~37000 for moderate exercise). Likely a units issue, not a column-mapping one — verify against a known-correct VO2 reading and add unit conversion if needed.
 
-## Tests to add (Stage 4 of the original extraction plan)
+## Stage 4 status (added 2026-05-08)
 
-1. CSV header parsing — `_parse_hdr`, `_parse_sig_name`, `_detect_parser` per version.
-2. End-to-end `Log` loading — one trimmed fixture per header format.
-3. Signal classes — IMU axis access, FSR channel access, VO2Master column mapping (regression test for the bug fixed on 2026-05-08).
-4. `EMG.process` envelope pipeline.
-5. `EKG` R-peak detection (NeuroKit's `ecg_simulate` for synthetic input).
-6. ICA cleaning.
+All six features have docs + tests in `tests/`:
+
+1. ✅ CSV header parsing — `tests/test_parse.py` (22 tests).
+2. ✅ End-to-end `Log` loading — `tests/test_log.py` (20 tests, parametrized over all 7 fixtures).
+3. ✅ Signal classes — `tests/test_signals.py` (30 tests).
+4. ✅ `EMG.process` envelope pipeline — `tests/test_emg.py` (14 tests).
+5. ✅ `EKG` R-peak detection — `tests/test_ekg.py` (12 tests, NeuroKit's `ecg_simulate`).
+6. ✅ ICA cleaning — `tests/test_ica.py` (9 tests using a `Log`-shaped mock).
+
+Total: **107 tests, 2.9 s**. Fixtures live under `tests/fixtures/` and are
+generated from `_data/` via `scripts/make_fixture.py`.

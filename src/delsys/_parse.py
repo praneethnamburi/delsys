@@ -14,7 +14,41 @@ from delsys.signals import Signal, SensorLog
 
 
 def _parse_sig_name(sensor_sig_name, application, target_sr):
-    """Parse one CSV column header into a ``SigInfoDelsys`` record."""
+    """Parse one CSV column header into a ``SigInfoDelsys`` record.
+
+    Each Delsys CSV column header encodes ``"<sensor_name>: <signal_info>"``.
+    EMGworks and Discover use different signal-info conventions, both handled
+    here.
+
+    Parameters
+    ----------
+    sensor_sig_name : str
+        One column header from the CSV — e.g. ``"EMG 01 04498 (54717): EMG 1 (mV)"``
+        for Discover or ``"EMG 1.A: EMG 1 ..."`` for EMGworks.
+    application : str
+        ``'EMGworks'`` or ``'Trigno Discover'``.
+    target_sr : dict
+        Modality → target sampling rate map. Used only to validate that the
+        parsed modality is one we know about.
+
+    Returns
+    -------
+    SigInfoDelsys
+        Namedtuple with ``sensor_name``, ``modality``, ``sensor_number``,
+        ``subchannel``. ``modality`` is normalized: EMG single/duo/quattro
+        are tagged ``'EMGS'``/``'EMGD'``/``'EMGQ'``; FSR analog channels
+        get reclassified to ``'FSR'``; VO2 Master and HR Strap link devices
+        get the synthetic sensor numbers ``VO2_SENSOR_NUM`` / ``HR_SENSOR_NUM``.
+
+    Examples
+    --------
+    >>> info = _parse_sig_name(
+    ...     'EMG 01 04498 (54717): EMG 1 (mV)', 'Trigno Discover',
+    ...     {'EMGS': 2000},
+    ... )
+    >>> info.modality, info.sensor_number, info.subchannel
+    ('EMGS', 1, 'A')
+    """
     assert application in APPLICATIONS
 
     def _parse_sig_name_emgworks(ss_name):
@@ -101,10 +135,35 @@ def _read_sensor_log(sensor_map_file):
 
 
 def _parse_hdr(fname, sensor_name_replace=None):
-    """Read the CSV header rows and return a dict describing the application,
-    version, sampling info, and the synthesized per-column ``sensor: signal`` names.
+    """Read the CSV header rows and return a dict describing the file format.
 
-    Detects EMGworks vs. Trigno Discover (and Discover version) on the first row.
+    Detects EMGworks vs. Trigno Discover (and the Discover version) on the
+    first row, then reads however many additional rows the format defines and
+    synthesizes per-column ``"sensor: signal"`` strings.
+
+    Parameters
+    ----------
+    fname : str
+        Path to the CSV file.
+    sensor_name_replace : dict, optional
+        ``{corrupted_name: new_name}`` map, applied to signal column names
+        to repair sensor labels misspelled during data acquisition.
+
+    Returns
+    -------
+    dict
+        Always contains ``'application'`` (``'EMGworks'`` or ``'Trigno Discover'``)
+        and ``'skiprows'`` (rows pandas should skip when reading the data block).
+        For Trigno Discover files it also contains:
+
+        - ``'application_full'`` — full version string from row 1.
+        - ``'application_version'`` — extracted from parens: ``'1.4.2'``,
+          ``'1.5.0'``, ``'1.6.4'``, ``'1.7.0'``.
+        - ``'datetime'`` — collection start time from row 2.
+        - ``'duration_s'`` — collection length in seconds from row 3.
+        - ``'sensor_name_mode'`` — ``{sensor_name: mode_int}``.
+        - ``'sensor_signal_names'`` — synthesized list of per-column
+          ``"<sensor>: <signal>"`` strings used as pandas column names.
     """
     if sensor_name_replace is None:
         sensor_name_replace = {}

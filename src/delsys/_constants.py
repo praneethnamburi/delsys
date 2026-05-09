@@ -1,6 +1,9 @@
-"""Module-level constants and shared types for the delsys package."""
-from collections import namedtuple
+"""Module-level constants for the delsys package.
 
+The metadata namedtuples (``SensorLog``, ``SensorInfo``, ``SigInfoDelsys``)
+that used to live here moved to :mod:`delsys._metadata` to avoid a circular
+import between :mod:`delsys.signals` and :mod:`delsys.sensor`.
+"""
 
 # Standard target sampling rate per modality. Used to normalize raw signals
 # during loading; users can override by passing target_sr= to Log().
@@ -37,6 +40,3 @@ APPLICATIONS = ('EMGworks', 'Trigno Discover')
 # Chosen to not collide with Trigno-base sensor numbers (typically 1-16).
 VO2_SENSOR_NUM = 900
 HR_SENSOR_NUM = 901
-
-# Parsed signal info from a CSV column header
-SigInfoDelsys = namedtuple('SigInfoDelsys', 'sensor_name modality sensor_number subchannel')

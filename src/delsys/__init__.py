@@ -14,16 +14,14 @@ from delsys._constants import (
     SUBCHANNEL_MAP,
     TARGET_SR,
     VO2_SENSOR_NUM,
-    SigInfoDelsys,
 )
-from delsys._datamod import DataMod
+from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
 from delsys._util import decreturn
 from delsys.ekg import EKG
 from delsys.emg import EMG
-from delsys.ica import ica_cleaning, ica_components
 from delsys.log import Log
 from delsys.sensor import Sensor
-from delsys.signals import FSR, IMU, Signal, SensorInfo, SensorLog, VO2Master
+from delsys.signals import FSR, IMU, Signal, VO2Master
 
 __all__ = [
     # primary
@@ -36,14 +34,10 @@ __all__ = [
     "IMU",
     "FSR",
     "VO2Master",
-    "DataMod",
     # metadata records
     "SensorInfo",
     "SensorLog",
     "SigInfoDelsys",
-    # ICA helpers
-    "ica_components",
-    "ica_cleaning",
     # utilities
     "decreturn",
     # constants

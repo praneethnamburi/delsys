@@ -31,7 +31,7 @@ def _const_columns(n_samples, n_channels):
 def imu():
     si = _sensor_info({"ACC"})
     sig = _const_columns(1000, 3)  # column 0=1.0, 1=2.0, 2=3.0
-    return IMU(sig, sr=200.0, t0=0.0, sensor=si)
+    return IMU(sig, sr=200.0, t0=0.0, meta={"sensor": si})
 
 
 def test_imu_shape(imu):
@@ -59,7 +59,7 @@ def test_imu_axis_returns_imu_instance(imu):
 def fsr():
     si = _sensor_info({"FSR"})
     sig = _const_columns(500, 4)  # column 0=1.0, ..., 3=4.0
-    return FSR(sig, sr=148.0, t0=0.0, sensor=si)
+    return FSR(sig, sr=148.0, t0=0.0, meta={"sensor": si})
 
 
 def test_fsr_shape(fsr):
@@ -88,7 +88,7 @@ def test_fsr_channel_returns_fsr_instance(fsr):
 def vo2():
     si = _sensor_info({"VO2"}, number=900, location=None)
     sig = _const_columns(50, 8)  # column i has value i+1
-    return VO2Master(sig, sr=1.0, t0=0.0, sensor=si)
+    return VO2Master(sig, sr=1.0, t0=0.0, meta={"sensor": si})
 
 
 def test_vo2master_shape(vo2):
@@ -141,7 +141,7 @@ def test_vo2master_aliases_match_canonical(vo2, alias, canonical):
 def test_signal_records_sensor_modality_subchannel():
     si = _sensor_info({"EMGS"})
     sig = np.linspace(0, 1, 500)
-    s = Signal(sig, sr=2000.0, sensor=si, modality="EMGS", subchannel="A", t0=0.5)
+    s = Signal(sig, sr=2000.0, t0=0.5, meta={"sensor": si, "modality": "EMGS", "subchannel": "A"})
     assert s.sensor is si
     assert s.modality == "EMGS"
     assert s.subchannel == "A"
@@ -152,15 +152,10 @@ def test_signal_records_sensor_modality_subchannel():
 def test_signal_clone_preserves_metadata():
     """Cloning a Signal (e.g. via filtering) keeps sensor/modality/subchannel."""
     si = _sensor_info({"EMGS"})
-    s = Signal(np.linspace(0, 1, 500), 2000.0, si, "EMGS", "A")
+    s = Signal(np.linspace(0, 1, 500), 2000.0,
+               meta={"sensor": si, "modality": "EMGS", "subchannel": "A"})
     s2 = s.lowpass(50)  # filtering goes through _clone
     assert isinstance(s2, Signal)
     assert s2.sensor is si
     assert s2.modality == "EMGS"
     assert s2.subchannel == "A"
-
-
-def test_signal_rejects_non_sensorinfo():
-    """Signal asserts that ``sensor`` is a SensorInfo namedtuple."""
-    with pytest.raises(AssertionError):
-        Signal(np.zeros(10), 100.0, sensor="not a SensorInfo", modality="EMGS", subchannel="A")

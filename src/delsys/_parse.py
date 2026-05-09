@@ -9,8 +9,9 @@ import pysampled
 from scipy.interpolate import interp1d
 from scipy.signal import resample
 
-from delsys._constants import APPLICATIONS, SigInfoDelsys, VO2_SENSOR_NUM, HR_SENSOR_NUM
-from delsys.signals import Signal, SensorLog
+from delsys._constants import APPLICATIONS, VO2_SENSOR_NUM, HR_SENSOR_NUM
+from delsys._metadata import SensorLog, SigInfoDelsys
+from delsys.signals import Signal
 
 
 def _parse_sig_name(sensor_sig_name, application, target_sr):
@@ -292,7 +293,10 @@ def _parse_dataframe_emgworks(df, signal_map, sensors_info, target_sr, sig_names
         sr_targ = target_sr[sig_info.modality]
         sig_resampled = resample(sig, round(n_samples * sr_targ / sr))
         this_sensor, = [sensor for sensor in sensors_info if sensor.number == sig_info.sensor_number]
-        signals.append(Signal(sig_resampled, sr_targ, this_sensor, sig_info.modality, sig_info.subchannel, t0=t0))
+        signals.append(Signal(
+            sig_resampled, sr_targ, t0=t0,
+            meta={"sensor": this_sensor, "modality": sig_info.modality, "subchannel": sig_info.subchannel},
+        ))
 
     return t_min, t_max, sr_list, signals
 
@@ -320,7 +324,10 @@ def _parse_dataframe_discover(df, signal_map, sensors_info, target_sr, duration_
             else:
                 sig_resampled = pysampled.Data(d, sr=sr).interpnan().resample(sr_targ)
             this_sensor, = [sensor for sensor in sensors_info if sensor.number == sig_info.sensor_number]
-            signals.append(Signal(sig_resampled(), sig_resampled.sr, this_sensor, sig_info.modality, sig_info.subchannel, t0=t0))
+            signals.append(Signal(
+                sig_resampled(), sig_resampled.sr, t0=t0,
+                meta={"sensor": this_sensor, "modality": sig_info.modality, "subchannel": sig_info.subchannel},
+            ))
 
     return t_min, t_max, sr_list, signals
 
@@ -369,7 +376,10 @@ def _parse_dataframe_discover_with_link(df, signal_map, sensors_info, target_sr,
                 f'{np.sum(d == 0)} / {len(d)} = {(np.sum(d == 0) / len(d)) * 100:5.2f}% \n'
             )
             this_sensor, = [sensor for sensor in sensors_info if sensor.number == sig_info.sensor_number]
-            signals.append(Signal(sig_resampled(), sig_resampled.sr, this_sensor, sig_info.modality, sig_info.subchannel, t0=t0))
+            signals.append(Signal(
+                sig_resampled(), sig_resampled.sr, t0=t0,
+                meta={"sensor": this_sensor, "modality": sig_info.modality, "subchannel": sig_info.subchannel},
+            ))
 
         assert round(duration * max(sr_list)) == len(df)
 

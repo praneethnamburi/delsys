@@ -25,7 +25,7 @@ def _sine_burst_emg(sr=2000.0, dur=2.0, burst=(0.5, 1.5), freq=100.0, amp=0.3, n
     burst_mask = (t >= burst[0]) & (t <= burst[1])
     sig[burst_mask] += amp * np.sin(2 * np.pi * freq * t[burst_mask])
     sig = sig.reshape(-1, 1)  # production EMG bundles are 2D (N, channels)
-    return EMG(sig, sr=sr, t0=0.0, sensor=_emg_sensor()), t, burst_mask
+    return EMG(sig, sr=sr, t0=0.0, meta={"sensor": _emg_sensor()}), t, burst_mask
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ def test_tkeo_zero_for_constant_signal():
     """TKEO of a perfectly constant signal is ~0 everywhere."""
     si = _emg_sensor()
     sig = np.full((500, 1), 0.7)
-    emg = EMG(sig, sr=2000.0, t0=0.0, sensor=si)
+    emg = EMG(sig, sr=2000.0, t0=0.0, meta={"sensor": si})
     out = emg.tkeo()
     assert np.allclose(out(), 0, atol=1e-12)
 

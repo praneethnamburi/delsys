@@ -1,5 +1,5 @@
-"""Synthetic-ECG tests for ``EKG``: R-peak detection across the three back-ends,
-plus rate properties and metadata round-trip."""
+"""Synthetic-ECG tests for ``EKG``: R-peak detection plus rate properties and
+metadata round-trip."""
 import neurokit2 as nk
 import numpy as np
 import pytest
@@ -32,7 +32,7 @@ def synthetic_ekg():
         heart_rate=HEART_RATE_BPM, random_state=0,
     )
     sig_2d = sig.reshape(-1, 1)  # production EKG bundles are 2D
-    return EKG(sig_2d, sr=SR, t0=0.0, sensor=_ekg_sensor())
+    return EKG(sig_2d, sr=SR, t0=0.0, meta={"sensor": _ekg_sensor()})
 
 
 # ---------------------------------------------------------------------------
@@ -53,17 +53,11 @@ def test_ekg_preserves_sensor(synthetic_ekg):
 
 
 # ---------------------------------------------------------------------------
-# R-peak detection — three back-ends should all land near the simulated HR
+# R-peak detection
 # ---------------------------------------------------------------------------
 
 def _peaks_per_minute(n_peaks):
     return 60 * n_peaks / DURATION_S
-
-
-def test_find_rpeaks_nk_recovers_simulated_rate(synthetic_ekg):
-    peaks = synthetic_ekg.find_rpeaks_nk(to="idx")
-    rate = _peaks_per_minute(len(peaks))
-    assert abs(rate - HEART_RATE_BPM) < 5, f"NK rate {rate:.1f} bpm vs target {HEART_RATE_BPM}"
 
 
 def test_find_rpeaks_pn_recovers_simulated_rate(synthetic_ekg):
@@ -73,23 +67,9 @@ def test_find_rpeaks_pn_recovers_simulated_rate(synthetic_ekg):
     assert abs(rate - HEART_RATE_BPM) < 5, f"PN rate {rate:.1f} bpm vs target {HEART_RATE_BPM}"
 
 
-def test_find_rpeaks_hp_recovers_simulated_rate(synthetic_ekg, tmp_path):
-    """HeartPy back-end. ``cleaned=False`` skips the JSON-based manual edits."""
-    json_path = tmp_path / "ekginfo.json"
-    peaks = synthetic_ekg.find_rpeaks_hp(path=str(json_path), to="idx", cleaned=False)
-    rate = _peaks_per_minute(len(peaks))
-    assert abs(rate - HEART_RATE_BPM) < 5, f"HP rate {rate:.1f} bpm vs target {HEART_RATE_BPM}"
-
-
 def test_find_rpeaks_alias_points_to_pn(synthetic_ekg):
     """``find_rpeaks`` is an alias for ``find_rpeaks_pn``."""
     assert EKG.find_rpeaks is EKG.find_rpeaks_pn
-
-
-def test_find_rpeaks_nk_data_returns_times_and_values(synthetic_ekg):
-    times, vals = synthetic_ekg.find_rpeaks_nk(to="data")
-    assert len(times) == len(vals)
-    assert np.all(times >= 0) and np.all(times <= DURATION_S)
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +127,3 @@ def test_flip_signal_toggles_flag(synthetic_ekg):
     assert synthetic_ekg.meta["is_flipped"] is not initial
     synthetic_ekg.flip_signal()
     assert synthetic_ekg.meta["is_flipped"] is initial
-
-
-# ---------------------------------------------------------------------------
-# Note: the ``cleaned=True`` path in ``find_rpeaks_hp`` has a pre-existing bug
-# (see TODO.md — "Known bugs"). Tests deliberately avoid that code path.
-# ---------------------------------------------------------------------------

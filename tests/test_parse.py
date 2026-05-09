@@ -138,9 +138,9 @@ def test_detect_parser_discover_link_with_timestamps(fixtures_dir):
 
 def test_detect_parser_link_without_timestamps_raises(fixtures_dir):
     """When VO2/HR columns are present but Time Series is not, parser raises
-    a clear error (link data needs timestamps for resampling)."""
+    a clear ValueError (link data needs timestamps for resampling)."""
     hdr = _parse_hdr(str(fixtures_dir / "discover164_link.csv"))
-    with pytest.raises(Exception, match="Time Series"):
+    with pytest.raises(ValueError, match="Time Series"):
         _detect_parser(hdr, time_names=[])
 
 

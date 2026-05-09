@@ -112,13 +112,9 @@ def test_tkeo_zero_for_constant_signal():
 # ---------------------------------------------------------------------------
 
 def test_get_features_temporal_keys(burst_emg):
-    """Temporal features include canonical keys (mean, rms, mav, zcr, ...).
-
-    ``to=dict`` is passed explicitly because the ``decreturn`` decorator
-    requires it (see TODO.md).
-    """
+    """Temporal features include canonical keys (mean, rms, mav, zcr, ...)."""
     emg, _, _ = burst_emg
-    feats = emg.get_features(kind="temp", win_size=0.25, win_inc=0.1, to=dict)
+    feats = emg.get_features(kind="temp", win_size=0.25, win_inc=0.1)
     for key in ("mean", "rms", "mav", "zcr", "wamp"):
         assert key in feats, f"missing temporal feature {key!r}"
     # Time vector matches feature length.
@@ -129,23 +125,20 @@ def test_get_features_temporal_keys(burst_emg):
 def test_get_features_frequency_keys(burst_emg):
     """Frequency features include mean / peak / median frequency keys."""
     emg, _, _ = burst_emg
-    feats = emg.get_features(kind="freq", win_size=0.25, win_inc=0.1, to=dict)
+    feats = emg.get_features(kind="freq", win_size=0.25, win_inc=0.1)
     for key in ("mnf", "mwf", "mav", "pkf", "frr"):
         assert key in feats
 
 
 def test_get_features_invalid_kind_raises(burst_emg):
     emg, _, _ = burst_emg
-    # Note: ``to=`` must be passed explicitly because the ``decreturn`` decorator
-    # reads it from kwargs before delegating; the function-signature default is
-    # not honored. Tracked as a follow-up in TODO.md.
     with pytest.raises(ValueError, match="Not supported kind"):
-        emg.get_features(kind="bogus", to=dict)
+        emg.get_features(kind="bogus")
 
 
 def test_get_features_to_dataframe(burst_emg):
-    """``to=pd.DataFrame`` returns a DataFrame thanks to the decreturn decorator."""
+    """get_features returns a dict; callers wrap with pd.DataFrame for tabular form."""
     emg, _, _ = burst_emg
-    feats = emg.get_features(kind="temp", win_size=0.25, win_inc=0.1, to=pd.DataFrame)
+    feats = pd.DataFrame(emg.get_features(kind="temp", win_size=0.25, win_inc=0.1))
     assert isinstance(feats, pd.DataFrame)
     assert "mean" in feats.columns

@@ -15,7 +15,6 @@ import pysampled
 from scipy.fftpack import fft, fftfreq
 
 from delsys._metadata import SensorInfo
-from delsys._util import decreturn
 
 
 class EMG(pysampled.Data):
@@ -35,7 +34,7 @@ class EMG(pysampled.Data):
             lf = delsys.Log("trial_01.csv")
             for emg in lf.emg:
                 envelope = emg.process(amp_kind="envelope2")
-                features = emg.get_features(kind="temp", win_size=0.25, win_inc=0.1, to=dict)
+                features = emg.get_features(kind="temp", win_size=0.25, win_inc=0.1)
     """
 
     @property
@@ -48,19 +47,13 @@ class EMG(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
-    @decreturn
-    def process_nk(self, to: type = dict) -> Any:
+    def process_nk(self) -> Dict[str, Any]:
         """Process the EMG with NeuroKit2's :func:`nk.emg_process`.
 
-        Args:
-            to: Return type — one of ``dict``, ``pd.DataFrame``, ``np.ndarray``,
-                or ``list``. Must be passed explicitly even though the default
-                shows ``dict`` (the ``decreturn`` decorator reads ``to`` from
-                kwargs before calling the function).
-
         Returns:
-            Per-window NeuroKit signal traces (clean signal, amplitude,
-            activations, ...) in the requested container shape.
+            Dict of per-sample NeuroKit signal traces (clean signal,
+            amplitude, activations, ...). Wrap in ``pd.DataFrame(...)`` if
+            you want a DataFrame.
         """
         signals, _ = nk.emg_process(self().flatten(), self.sr)
         return signals.to_dict()
@@ -288,29 +281,26 @@ class EMG(pysampled.Data):
         }
         return funcs
 
-    @decreturn
-    def get_features_nk(self, method: str = "interval", to: type = dict) -> Any:
+    def get_features_nk(self, method: str = "interval") -> Dict[str, Any]:
         """Compute EMG features via NeuroKit2's :func:`nk.emg_analyze`.
 
         Args:
             method: NeuroKit analysis method (``'interval'``, ``'event-related'``).
-            to: Return type — see :meth:`process_nk`. Must be passed explicitly.
 
         Returns:
-            Per-feature dict / DataFrame / array / list.
+            Dict of per-feature values. Wrap in ``pd.DataFrame(...)`` if you
+            want a DataFrame.
         """
-        signals = self.process_nk(to=pd.DataFrame)
+        signals = pd.DataFrame(self.process_nk())
         signals = nk.emg_analyze(signals, self.sr, method=method)
         return signals.to_dict()
 
-    @decreturn
     def get_features(
         self,
         kind: str = "all",
         win_size: float = 0.25,
         win_inc: float = 0.1,
-        to: type = dict,
-    ) -> Any:
+    ) -> Dict[str, Any]:
         """Hand-rolled temporal and/or frequency features over a sliding window.
 
         Args:
@@ -318,11 +308,11 @@ class EMG(pysampled.Data):
                 frequency), ``'temp'``, or ``'freq'``.
             win_size: Window length in seconds.
             win_inc: Window step in seconds.
-            to: Return type — see :meth:`process_nk`. Must be passed explicitly.
 
         Returns:
-            Dict (or DataFrame / array / list per ``to``) keyed by feature
-            name. The ``'time'`` entry holds the per-window timestamps.
+            Dict keyed by feature name. The ``'time'`` entry holds the
+            per-window timestamps. Wrap in ``pd.DataFrame(...)`` if you want
+            a DataFrame.
 
         Raises:
             ValueError: If ``kind`` is not one of ``'all'``, ``'temp'``,

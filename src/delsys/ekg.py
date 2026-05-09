@@ -18,7 +18,6 @@ import numpy as np
 import pysampled
 
 from delsys._metadata import SensorInfo
-from delsys._util import decreturn
 
 
 class EKG(pysampled.Data):
@@ -104,46 +103,40 @@ class EKG(pysampled.Data):
         """Mean respiration rate (breaths per minute) over the full signal, via HeartPy."""
         return hp.process(self().flatten(), self.sr)[1]["breathingrate"]
 
-    @decreturn
-    def process_nk(self, method: str = "neurokit", to: type = dict) -> Any:
+    def process_nk(self, method: str = "neurokit") -> Dict[str, Any]:
         """Process the ECG with NeuroKit2's :func:`nk.ecg_process`.
 
         Args:
             method: Cleaning method passed to NeuroKit (``'neurokit'``,
                 ``'biosppy'``, ``'pantompkins1985'``, ``'hamilton2002'``,
                 ``'elgendi2010'``, ``'engzeemod2012'``).
-            to: Return type — one of ``dict``, ``pd.DataFrame``,
-                ``np.ndarray``, ``list``. Must be passed explicitly even
-                though the default shows ``dict`` (the ``decreturn``
-                decorator reads ``to`` from kwargs before calling).
 
         Returns:
-            Per-sample NeuroKit signal traces (``ECG_Clean``, ``ECG_R_Peaks``,
-            ``ECG_Rate``, ...) in the requested container shape.
+            Dict of per-sample NeuroKit signal traces (``ECG_Clean``,
+            ``ECG_R_Peaks``, ``ECG_Rate``, ...). Wrap in ``pd.DataFrame(...)``
+            if you want a DataFrame.
         """
         signals, _ = nk.ecg_process(self().flatten(), self.sr, method=method)
         return signals.to_dict()
 
-    @decreturn
     def get_features_hp(
         self,
         win_size: float = 5.0,
         win_inc: float = 0.1,
-        to: type = dict,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Dict[str, Any]:
         """Segment-wise ECG features via HeartPy's :func:`hp.process_segmentwise`.
 
         Args:
             win_size: Segment width in seconds.
             win_inc: Segment step in seconds.
-            to: Return type — see :meth:`process_nk`. Must be passed explicitly.
             **kwargs: Forwarded to :func:`hp.process_segmentwise`.
 
         Returns:
-            A feature dictionary keyed by HeartPy metric name (e.g. ``'bpm'``,
-            ``'sdnn'``, ``'rmssd'``). The added ``'time'`` entry holds
-            ``(t_start, t_end)`` pairs for each segment.
+            Dict keyed by HeartPy metric name (e.g. ``'bpm'``, ``'sdnn'``,
+            ``'rmssd'``). The added ``'time'`` entry holds
+            ``(t_start, t_end)`` pairs for each segment. Wrap in
+            ``pd.DataFrame(...)`` if you want a DataFrame.
         """
         win_over = float(np.clip(1 - win_inc / win_size, 0.0, 0.999))
         result = hp.process_segmentwise(

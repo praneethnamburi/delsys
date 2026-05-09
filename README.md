@@ -9,7 +9,7 @@
 
 *Load Delsys CSV exports into Python as `pysampled.Data` time series.*
 
-`delsys` reads CSV files from EMGworks and Trigno Discover, normalizes their
+`delsys` reads CSV files exported from EMGworks and Trigno Discover, normalizes their
 many per-format quirks (header layouts, sub-channel orderings, link-device
 asynchrony), resamples each channel to a configurable per-modality target
 rate, and groups the result into per-sensor modality bundles (EMG, EKG,
@@ -92,7 +92,7 @@ Trailing parenthetical notes are informational only — they remain in
 Blank lines and lines without two `" - "` separators are silently skipped.
 
 A more comprehensive reference file lives at
-[`examples/delsys_channelmap.txt`](examples/delsys_channelmap.txt).
+[`examples/delsys_channelmap.txt`](https://github.com/praneethnamburi/delsys/blob/main/examples/delsys_channelmap.txt).
 
 ## Supported export formats
 
@@ -125,7 +125,7 @@ pytest
 
 ## License
 
-Distributed under the MIT License. See [LICENSE](LICENSE) for details.
+Distributed under the MIT License. See [LICENSE](https://github.com/praneethnamburi/delsys/blob/main/LICENSE) for details.
 
 ## Contact
 

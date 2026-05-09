@@ -1,4 +1,4 @@
-"""Load and analyze Delsys EMG-system CSV exports as ``pysampled.Data`` time series.
+"""Load and analyze Delsys CSV exports as ``pysampled.Data`` time series.
 
 The package centers on :class:`Log`, which reads a CSV exported from EMGworks
 or Trigno Discover, normalizes its many per-format quirks (header layouts,

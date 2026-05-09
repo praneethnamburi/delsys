@@ -166,17 +166,47 @@ def _parse_sig_name_discover(ss_name: str) -> Tuple[str, str, int, str]:
 
 
 def _read_sensor_log(sensor_map_file: str) -> List[SensorLog]:
-    """Read a Delsys channelmap text file.
+    """Read a Delsys channelmap text file into a list of :class:`SensorLog` records.
+
+    The channelmap format is hand-rolled (not a Delsys export). One sensor
+    per non-empty line, three fields separated by ``" - "`` (space-dash-space):
+
+    .. code-block:: text
+
+        Ch 1 - EMG - LBicep
+        Ch 2 - EMG - RBicep
+        Ch 5 - snap lead - RTricep
+        Ch 11 - EKG - Chest
+        Ch 12 - Sync - Optitrack Recording Gate
+
+    Field semantics:
+
+    - **Field 1** — any text whose last whitespace-token is the sensor's
+      channel number (``"Ch 1"``, ``"Channel 01"``, and ``"1"`` all work).
+    - **Field 2** — type tag, free text. Common values are ``"EMG"``,
+      ``"snap lead"``, ``"EKG"``, ``"FSR"``, ``"Sync"``. The Sensor builder
+      uses ``"FSR"`` to reclassify Discover Analog channels as FSR.
+    - **Field 3** — location label. Its **first character** is taken as the
+      ``lrc`` field (``"L"``, ``"R"``, ``"C"`` for left/right/center).
+      Anything else still loads but won't match :meth:`Log.find` ``side=``
+      filters.
+
+    Lines without two ``" - "`` separators are silently skipped, as are
+    blank lines. The file is read with ``utf-8-sig`` so a leading BOM is
+    handled.
+
+    A reference file lives at :file:`examples/delsys_channelmap.txt` in the
+    repository.
 
     Args:
-        sensor_map_file: Path to a ``delsys_channelmap.txt``-shaped file —
-            one sensor per non-empty line, fields separated by ``" - "``,
-            with the sensor number as the last whitespace-token of the first
-            field, the type in the second, and ``"<lrc><location>"`` in the
-            third.
+        sensor_map_file: Path to the channelmap text file.
 
     Returns:
-        List of :class:`SensorLog` records.
+        List of :class:`SensorLog` namedtuples — one per recognized line.
+
+    Raises:
+        ValueError: If a recognized line's first field has no parseable
+            channel-number token (e.g. ``"Ch X - EMG - LBicep"``).
     """
     with open(sensor_map_file, "r", encoding="utf-8-sig") as f:
         sensor_map_raw = [x.split(" - ") for x in f.read().splitlines() if x]

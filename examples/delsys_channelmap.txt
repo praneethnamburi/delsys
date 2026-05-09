@@ -1,0 +1,22 @@
+Ch 1 - EMG - LBrachialis
+Ch 2 - EMG - LPinkyReach (LPalmaris Longus)
+Ch 3 - EMG - LDeltoid
+Ch 4 - EMG - RVastusMedialis
+Ch 5 - EMG - RVastusLateralis
+Ch 7 - EMG - RBicepsFemorisLongHead
+
+Ch 12 - EKG - Chest
+Ch 13 - Sync - Sync (A-Optitrack, B-Telemed, C-BertecFz1R, D-BertecFz2L)
+
+Ch 19 - Quattro - LForearmExtensors (A-Index, B-Middle, C-Ring, D-Little)
+Ch 20 - Quattro - RLowerLeg (A-MedialGastroc, B-LateralGastroc, C-TibialisAnterior, D-Peroneus)
+
+Ch 21 - FSR - LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)
+Ch 25 - FSR - RFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)
+
+Ch 32 - Snap - LForearmFlexors
+Ch 33 - Snap - LBiceps
+Ch 34 - Snap - LTriceps
+Ch 35 - Snap - RGlutMed
+Ch 36 - Snap - RErectorSpinaeLower
+Ch 37 - Snap - LLatissimus

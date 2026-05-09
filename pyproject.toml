@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "delsys"
 version = "0.1.0"
-description = "Load and process Delsys EMG system CSV exports (EMGworks, Trigno Discover) in Python."
+description = "Load and process Delsys CSV exports in Python."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [

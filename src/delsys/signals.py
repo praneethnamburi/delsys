@@ -115,9 +115,14 @@ class IMU(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
-    x = property(lambda s: s._clone(s()[:, 0], signal_names=["acc_x"], signal_coords=["x"]))
-    y = property(lambda s: s._clone(s()[:, 1], signal_names=["acc_y"], signal_coords=["y"]))
-    z = property(lambda s: s._clone(s()[:, 2], signal_names=["acc_z"], signal_coords=["z"]))
+    # Inherit signal_names from the parent so a single-axis IMU still carries
+    # its sensor label (e.g. ``"LBicep"``); only ``signal_coords`` is pinned
+    # to the chosen axis. ``_clone`` defaults inherit the parent's
+    # ``signal_names`` automatically when ``n_signals`` is unchanged, so we
+    # only need to override ``signal_coords``.
+    x = property(lambda s: s._clone(s()[:, 0], signal_coords=["x"]))
+    y = property(lambda s: s._clone(s()[:, 1], signal_coords=["y"]))
+    z = property(lambda s: s._clone(s()[:, 2], signal_coords=["z"]))
 
 
 class FSR(pysampled.Data):
@@ -149,10 +154,12 @@ class FSR(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
-    a = property(lambda s: s._clone(s()[:, 0], signal_names=["fsr_a"], signal_coords=["a"]))
-    b = property(lambda s: s._clone(s()[:, 1], signal_names=["fsr_b"], signal_coords=["b"]))
-    c = property(lambda s: s._clone(s()[:, 2], signal_names=["fsr_c"], signal_coords=["c"]))
-    d = property(lambda s: s._clone(s()[:, 3], signal_names=["fsr_d"], signal_coords=["d"]))
+    # Inherit ``signal_coords`` from the parent (e.g. ``["fsr"]``); only
+    # ``signal_names`` differs (the parent's i-th channel name).
+    a = property(lambda s: s._clone(s()[:, 0], signal_names=[s.signal_names[0]]))
+    b = property(lambda s: s._clone(s()[:, 1], signal_names=[s.signal_names[1]]))
+    c = property(lambda s: s._clone(s()[:, 2], signal_names=[s.signal_names[2]]))
+    d = property(lambda s: s._clone(s()[:, 3], signal_names=[s.signal_names[3]]))
 
 
 class VO2Master(pysampled.Data):
@@ -204,27 +211,27 @@ class VO2Master(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
+    # Inherit ``signal_coords`` from the parent; only ``signal_names``
+    # differs (the parent's i-th channel name).
     rr = respiration_rate = property(
-        lambda s: s._clone(s()[:, 0], signal_names=["resp_rate"], signal_coords=["value"])
+        lambda s: s._clone(s()[:, 0], signal_names=[s.signal_names[0]])
     )
     td = tidal_vol = property(
-        lambda s: s._clone(s()[:, 1], signal_names=["tidal_vol"], signal_coords=["value"])
+        lambda s: s._clone(s()[:, 1], signal_names=[s.signal_names[1]])
     )
     vent = ventilation = property(
-        lambda s: s._clone(s()[:, 2], signal_names=["ventilation"], signal_coords=["value"])
+        lambda s: s._clone(s()[:, 2], signal_names=[s.signal_names[2]])
     )
-    Feo2 = property(lambda s: s._clone(s()[:, 3], signal_names=["feo2"], signal_coords=["value"]))
+    Feo2 = property(lambda s: s._clone(s()[:, 3], signal_names=[s.signal_names[3]]))
     vo2 = VO2_absolute = property(
-        lambda s: s._clone(s()[:, 4], signal_names=["vo2_absolute"], signal_coords=["value"])
+        lambda s: s._clone(s()[:, 4], signal_names=[s.signal_names[4]])
     )
     ap = ambient_pressure = property(
-        lambda s: s._clone(s()[:, 5], signal_names=["ambient_pressure"], signal_coords=["value"])
+        lambda s: s._clone(s()[:, 5], signal_names=[s.signal_names[5]])
     )
     fl = flow_sensor = property(
-        lambda s: s._clone(s()[:, 6], signal_names=["flow_sensor"], signal_coords=["value"])
+        lambda s: s._clone(s()[:, 6], signal_names=[s.signal_names[6]])
     )
     o2_hum = oxygen_sensor_humidity = property(
-        lambda s: s._clone(
-            s()[:, 7], signal_names=["oxygen_sensor_humidity"], signal_coords=["value"]
-        )
+        lambda s: s._clone(s()[:, 7], signal_names=[s.signal_names[7]])
     )

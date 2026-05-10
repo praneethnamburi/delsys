@@ -37,7 +37,14 @@ def _const_columns(n_samples, n_channels):
 def imu():
     si = _sensor_info({"ACC"})
     sig = _const_columns(1000, 3)  # column 0=1.0, 1=2.0, 2=3.0
-    return IMU(sig, sr=200.0, t0=0.0, meta={"sensor": si})
+    return IMU(
+        sig,
+        sr=200.0,
+        t0=0.0,
+        meta={"sensor": si},
+        signal_names=["test"],
+        signal_coords=["x", "y", "z"],
+    )
 
 
 def test_imu_shape(imu):
@@ -66,7 +73,14 @@ def test_imu_axis_returns_imu_instance(imu):
 def fsr():
     si = _sensor_info({"FSR"})
     sig = _const_columns(500, 4)  # column 0=1.0, ..., 3=4.0
-    return FSR(sig, sr=148.0, t0=0.0, meta={"sensor": si})
+    return FSR(
+        sig,
+        sr=148.0,
+        t0=0.0,
+        meta={"sensor": si},
+        signal_names=["a", "b", "c", "d"],
+        signal_coords=["fsr"],
+    )
 
 
 def test_fsr_shape(fsr):
@@ -96,7 +110,23 @@ def test_fsr_channel_returns_fsr_instance(fsr):
 def vo2():
     si = _sensor_info({"VO2"}, number=900, location=None)
     sig = _const_columns(50, 8)  # column i has value i+1
-    return VO2Master(sig, sr=1.0, t0=0.0, meta={"sensor": si})
+    return VO2Master(
+        sig,
+        sr=1.0,
+        t0=0.0,
+        meta={"sensor": si},
+        signal_names=[
+            "resp_rate",
+            "tidal_vol",
+            "ventilation",
+            "feo2",
+            "vo2_absolute",
+            "ambient_pressure",
+            "flow_sensor",
+            "oxygen_sensor_humidity",
+        ],
+        signal_coords=["value"],
+    )
 
 
 def test_vo2master_shape(vo2):

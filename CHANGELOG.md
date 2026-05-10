@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-10
+
+Breaking change to the typed `Log.<modality>` accessors plus a
+parse-time fix for same-rate sample-count drift. Bumped to **0.2.0**
+under the "breaking change → minor on 0.x" semver-on-0.x convention.
+
+### Changed (BREAKING)
+
+- `Log.emg` / `Log.ekg` / `Log.acc` / `Log.gyro` / `Log.fsr` /
+  `Log.analog` / `Log.vo2master` / `Log.hrstrap` now return a single
+  aggregated `pysampled.Data` per modality (channels stacked across
+  every sensor that carries the modality), or `None` if no sensor
+  does. Previously each returned a `List[Bundle]` (one entry per
+  sensor). Use `bundle.split_by_signal_name()` to recover the
+  per-sensor list.
+- `EMG.process(amp_kind="nk")` and `EKG.find_rpeaks_pn` now raise
+  `NotImplementedError` on multi-channel input with a hint to use
+  `split_by_signal_name`. Previously both silently flattened
+  column-major and produced nonsense.
+- `FSR.a` / `.b` / `.c` / `.d` raise `NotImplementedError` on
+  aggregate FSR (≠ 4 channels) since "the 4th channel" is meaningless
+  across heterogeneous sensors. The per-Sensor 4-channel view is
+  unchanged.
+
+### Added
+
+- `_normalize_signal_lengths` — same-rate length-drift normalization
+  in `_util.py`, called from `Log.__init__` between parser dispatch
+  and the per-Sensor stack. Tail-trims each `(modality, sr)` group to
+  its shortest length so floating-point drift from the per-format
+  resample step no longer trips `Sensor`'s same-modality length
+  assert. Drift exceeding `_DRIFT_TOLERANCE` (4 samples) emits a
+  `UserWarning`.
+- `_aggregate_bundles` helper — stacks per-Sensor bundles along the
+  signal axis, validates `signal_coords`/`axis`/`t0` agreement, and
+  downsamples higher-rate parts to the lowest sampling rate (with
+  `UserWarning`) when the input is multi-rate within one modality.
+- `bundle.sensors` (plural) property on every modality bundle
+  (`Signal`, `IMU`, `FSR`, `VO2Master`, `EMG`, `EKG`). Returns the
+  aggregate's `meta["sensors"]` list when present, else
+  `[meta["sensor"]]` for the per-Sensor case (length 1).
+- `meta["sensors"]` convention on aggregate bundles, aligned with
+  `signal_names` (so `len(bundle.meta["sensors"]) == len(bundle.signal_names)`).
+
+### Fixed
+
+- `IMU.x` / `.y` / `.z` use coord-lookup (`s["x"]`) instead of
+  positional column slicing, so the same accessor works on per-Sensor
+  IMU `(n, 3)` and aggregate IMU `(n, 3*N)`. The previous positional
+  slice silently returned only the first sensor's column on multi-
+  sensor input.
+
+### Migration
+
+| Before (0.1.x)                | After (0.2.0)                                       |
+|-------------------------------|-----------------------------------------------------|
+| `for emg in lf.emg:`          | `for emg in lf.emg.split_by_signal_name():`         |
+| `lf.acc[0].magnitude()`       | `lf.acc.split_by_signal_name()[0].magnitude()`      |
+| `len(lf.emg)`                 | `len(lf.emg.signal_names) if lf.emg else 0`         |
+| `if lf.acc:`                  | `if lf.acc is not None:`                            |
+| `lf.acc[0]`                   | `lf.acc.split_by_signal_name()[0]`                  |
+| `lf.fsr('')[1]`               | `lf.fsr.split_by_signal_name()[1]` (or by name)     |
+
+Downstream consumers that iterate `Log.<modality>` lists need updating;
+consumers that use `Sensor.<modality>` (per-Sensor view) are unchanged.
+
+### Provenance
+
+The accessor reshape and the drift fix are coupled: one bundle per
+modality only makes sense if every sensor's channels for that modality
+end up at identical post-resample lengths. The smoking-gun pickle is
+at `C:/dev/immersionToolbox/_data/_resampling numbers/`, where two
+ACC channels nominally at the same rate ended up 1 sample apart
+because of a Trigno frame quantization boundary. Centralizing the fix
+post-parse keeps the per-format parsers' quirks intact.
+
 ## [0.1.1] - 2026-05-09
 
 Non-breaking metadata enrichment that also restores correct

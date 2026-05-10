@@ -40,6 +40,45 @@ To regenerate this snapshot::
 (Source filter, branch tracking, and exclude rules live in
 `[tool.coverage.run]` / `[tool.coverage.report]` in `pyproject.toml`.)
 
+## Shipped in 0.2.0 (2026-05-10)
+
+- ✅ `Log.<modality>` accessors return a single aggregated bundle per
+  modality (channels stacked across all sensors that have the
+  modality) instead of `List[Bundle]`. Migration via
+  `bundle.split_by_signal_name()`.
+- ✅ Same-rate sample-count drift normalized at parse time
+  (`_normalize_signal_lengths` in `_util.py`), so per-Sensor stacking
+  no longer trips on 1-sample drift between channels of one modality.
+- ✅ `_aggregate_bundles` helper for multi-Sensor stacking, with
+  lowest-SR resample + `UserWarning` for multi-rate input.
+- ✅ `bundle.sensors` (plural) property unifies per-Sensor and
+  aggregate views; `meta["sensors"]` convention aligned with
+  `signal_names` on aggregates.
+- ✅ `IMU.x/y/z` use coord-lookup so the same accessor works on
+  per-Sensor and aggregate shapes.
+- ✅ `FSR.a/b/c/d` guarded to the 4-channel per-Sensor view; aggregate
+  FSR raises with a hint pointing at `split_by_signal_name()`.
+- ✅ `EMG.process(amp_kind='nk')` and `EKG.find_rpeaks_pn` raise
+  `NotImplementedError` on multi-channel input (was silent
+  column-major flatten).
+
+### Followups (target 0.2.1)
+
+- **`Log.__getitem__` deprecation.** Tiny but unrelated — defer.
+  `lf.find(...)` is the public-facing replacement.
+
+### Followups (target 0.3.0)
+
+- **Port `clean_emg_ekg_artifact`** (was the original 0.2 headline,
+  see "Post-0.1.0 roadmap" below). The aggregate accessor reshape
+  simplifies the splice-back step (the cleaner now sees `lf.emg` as
+  one bundle rather than a list).
+- **`MODALITY_REGISTRY` refactor** in `Sensor.__init__`. Touches
+  per-Sensor construction, which 0.2.0 left alone.
+- **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
+  once pysampled ships those classmethods (deferred from pysampled
+  1.2.0).
+
 ## Shipped in 0.1.1 (2026-05-09)
 
 - ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality

@@ -33,7 +33,7 @@ Example:
         import delsys
 
         lf = delsys.Log("path/to/Trial.csv")
-        for emg in lf.emg:
+        for emg in lf.emg.split_by_signal_name():
             envelope = emg.process(amp_kind="envelope2")
         right_forearm = lf.find(side="R", location="Forearm")
 """
@@ -52,7 +52,7 @@ from delsys.log import Log
 from delsys.sensor import Sensor
 from delsys.signals import FSR, IMU, Signal, VO2Master
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     # primary entry point

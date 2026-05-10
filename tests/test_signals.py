@@ -429,6 +429,35 @@ def test_fsr_channel_inherits_fallback_letters():
 # ---------------------------------------------------------------------------
 
 
+def test_fsr_a_raises_on_multi_sensor_aggregate():
+    """FSR.a..d are positional and only meaningful on a 4-channel per-Sensor
+    view. On a multi-sensor aggregate (8 / 12 / ... channels) they raise
+    with a hint pointing at split_by_signal_name() / name lookup."""
+    si_l = _sensor_info({"FSR"}, number=1, location="LFoot")
+    si_r = _sensor_info({"FSR"}, number=2, location="RFoot")
+    sig = np.zeros((100, 8))
+    agg = FSR(
+        sig,
+        sr=120.0,
+        axis=0,
+        t0=0.0,
+        meta={"sensors": [si_l] * 4 + [si_r] * 4},
+        signal_names=[f"LFoot_{k}" for k in "ABCD"] + [f"RFoot_{k}" for k in "ABCD"],
+        signal_coords=["fsr"],
+    )
+    with pytest.raises(NotImplementedError, match="per-Sensor"):
+        _ = agg.a
+
+
+def test_fsr_a_works_on_per_sensor_view():
+    """Pin 0.1.1 behavior: on a 4-channel per-Sensor FSR, .a/.b/.c/.d
+    pick one column each, with the parent's signal_coords inherited."""
+    sensor = _build_sensor("FSR", "LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)")
+    fsr = sensor.fsr
+    assert fsr.a.signal_names == ["LFoot_Heel"]
+    assert fsr.a.signal_coords == ["fsr"]
+
+
 def test_imu_axis_works_on_aggregate_shape():
     """``imu.x`` on a multi-sensor aggregate IMU returns one column per
     sensor (all of them on the X axis), with signal_coords=['x'] and

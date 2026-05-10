@@ -8,17 +8,37 @@ modality bundle (``EMG``, ``EKG``, ``IMU``, ``FSR``, ``VO2Master``,
 ``Analog``, or ``HRStrap``) for each.
 """
 
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pysampled
 
 from delsys._constants import SUBCHANNEL_MAP
 from delsys._metadata import SensorInfo
-from delsys._util import _mod_to_attr
+from delsys._util import _mod_to_attr, _parse_fsr_quattro_positions, _trim_location
 from delsys.ekg import EKG
 from delsys.emg import EMG
 from delsys.signals import FSR, IMU, Signal, VO2Master
+
+#: Fixed channel names for the VO2Master link device, in canonical column
+#: order (matches the column ordering produced by the parser via
+#: :data:`delsys._constants.SUBCHANNEL_MAP`'s ``'VO2'`` entry, minus the
+#: dropped ``BreathingCycle`` column).
+_VO2_SIGNAL_NAMES: Tuple[str, ...] = (
+    "resp_rate",
+    "tidal_vol",
+    "ventilation",
+    "feo2",
+    "vo2_absolute",
+    "ambient_pressure",
+    "flow_sensor",
+    "oxygen_sensor_humidity",
+)
+
+#: Letter suffixes used for multi-channel fallback names (Analog with >1
+#: channel, EMGD/EMGQ/FSR fallbacks). Beyond the four letters, callers fall
+#: back to numeric suffixes.
+_LETTER_KEYS: Tuple[str, ...] = ("A", "B", "C", "D")
 
 
 class Sensor:
@@ -91,25 +111,116 @@ class Sensor:
             # etc. without walking back through Log.sensors.
             sensor_meta = {"sensor": sensor_info}
 
+            n_channels = sig.shape[1] if sig.ndim == 2 else 1
+            signal_names, signal_coords = self._make_bundle_labels(
+                mod, sensor_info, n_channels
+            )
+            # ``axis=0`` is what the loader produces (samples down rows,
+            # channels across columns) — make it explicit so very short
+            # fixtures don't trip pysampled's argmax-based axis inference
+            # (e.g. a (1, 8) VO2 array would otherwise look like 1 channel
+            # of 8 samples).
+            bundle_kwargs = dict(
+                sr=sr,
+                axis=0,
+                t0=t0,
+                meta=sensor_meta,
+                signal_names=signal_names,
+                signal_coords=signal_coords,
+            )
+
             if mod in ("ACC", "GYRO"):
-                setattr(self, _mod_to_attr(mod), IMU(sig, sr, t0=t0, meta=sensor_meta))
+                setattr(self, _mod_to_attr(mod), IMU(sig, **bundle_kwargs))
             elif mod == "FSR":
-                self.fsr = FSR(sig, sr, t0=t0, meta=sensor_meta)
+                self.fsr = FSR(sig, **bundle_kwargs)
             elif mod == "EKG":
-                self.ekg = EKG(sig, sr, t0=t0, meta=sensor_meta)
+                self.ekg = EKG(sig, **bundle_kwargs)
             elif mod == "Analog":
                 # Analog stays as a plain pysampled.Data for backward compatibility;
                 # users wanting metadata can find it on the parent Sensor or via
-                # ``lf.find(modality='Analog', as_='sensor')``.
-                self.analog = pysampled.Data(sig, sr, t0=t0)
+                # ``lf.find(modality='Analog', as_='sensor')``. ``meta`` now
+                # carries the parent SensorInfo (was previously dropped).
+                self.analog = pysampled.Data(sig, **bundle_kwargs)
             elif mod == "VO2":
-                self.vo2master = VO2Master(sig, sr, t0=t0, meta=sensor_meta)
+                self.vo2master = VO2Master(sig, **bundle_kwargs)
             elif mod == "HR":
-                # HR Strap also stays as plain pysampled.Data for now.
-                self.hrstrap = pysampled.Data(sig, sr, t0=t0)
+                # HR Strap is also a plain pysampled.Data; same meta fix as Analog.
+                self.hrstrap = pysampled.Data(sig, **bundle_kwargs)
             else:
                 assert mod.startswith("EMG")
-                self.emg = EMG(sig, sr, t0=t0, meta=sensor_meta)
+                self.emg = EMG(sig, **bundle_kwargs)
+
+    @staticmethod
+    def _make_bundle_labels(
+        mod: str, sensor_info: SensorInfo, n_channels: int
+    ) -> Tuple[List[str], List[str]]:
+        """Build ``(signal_names, signal_coords)`` for a modality bundle.
+
+        Centralizes the label conventions documented in the 0.1.1 plan:
+
+        * ACC / GYRO use a single signal name (the trimmed location) with
+          three signal coordinates ``x``/``y``/``z``.
+        * EMGS / EKG use a single signal name with a single modality coord.
+        * EMGD / EMGQ / FSR are multi-name (one entry per channel) with a
+          single coordinate. EMGQ and FSR try to parse the channelmap
+          parenthetical for position names; on failure they fall back to
+          A/B/C/D suffixes.
+        * Analog is normally single-channel (``[loc] x ['analog']``) but
+          some sync sensors come through with multiple channels; multi-
+          channel Analog falls back to ``[loc_A, loc_B, ...]``.
+        * VO2 has eight fixed signal names.
+        * HR is always ``['heart_rate'] x ['bpm']``.
+
+        Args:
+            mod: Modality tag (one of the keys in
+                :data:`delsys._constants.SUBCHANNEL_MAP`).
+            sensor_info: The owning sensor's metadata; supplies ``location``
+                and ``number`` (the latter is only used for the no-channelmap
+                ``chN`` fallback).
+            n_channels: Actual number of channels in the stacked array.
+                Used for Analog (which is variable) and for the catch-all
+                fallback path.
+
+        Returns:
+            ``(signal_names, signal_coords)`` lists ready to pass to a
+            :class:`pysampled.Data` constructor.
+        """
+        loc = _trim_location(sensor_info.location, sensor_info.number)
+
+        if mod in ("ACC", "GYRO"):
+            return [loc], ["x", "y", "z"]
+        if mod == "EKG":
+            return [loc], ["ekg"]
+        if mod == "Analog":
+            if n_channels == 1:
+                return [loc], ["analog"]
+            return [
+                f"{loc}_{_LETTER_KEYS[i]}" if i < len(_LETTER_KEYS) else f"{loc}_{i}"
+                for i in range(n_channels)
+            ], ["analog"]
+        if mod == "VO2":
+            return list(_VO2_SIGNAL_NAMES), ["value"]
+        if mod == "HR":
+            return ["heart_rate"], ["bpm"]
+        if mod == "FSR":
+            parsed = _parse_fsr_quattro_positions(sensor_info.location, "FSR")
+            keys = parsed if parsed is not None else list(SUBCHANNEL_MAP["FSR"])
+            return [f"{loc}_{k}" for k in keys], ["fsr"]
+        if mod == "EMGS":
+            return [loc], ["emg"]
+        if mod == "EMGD":
+            return [f"{loc}_{k}" for k in SUBCHANNEL_MAP["EMGD"]], ["emg"]
+        if mod == "EMGQ":
+            parsed = _parse_fsr_quattro_positions(sensor_info.location, "EMGQ")
+            keys = parsed if parsed is not None else list(SUBCHANNEL_MAP["EMGQ"])
+            return [f"{loc}_{k}" for k in keys], ["emg"]
+        # Unknown modality — keep the bundle constructable by sizing
+        # signal_names to the actual channel count. Should never hit in
+        # practice (every modality the parser emits has a branch above).
+        return [
+            f"{loc}_{_LETTER_KEYS[i]}" if i < len(_LETTER_KEYS) else f"{loc}_{i}"
+            for i in range(n_channels)
+        ], ["value"]
 
     def get_signal(self) -> Optional[Union[EMG, EKG, pysampled.Data, FSR, VO2Master]]:
         """Return the first non-IMU bundle attached to this sensor.

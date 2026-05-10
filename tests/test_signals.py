@@ -299,7 +299,19 @@ def test_sensor_analog_labels_and_carries_meta():
 
 
 def test_sensor_vo2master_labels():
-    sensor = _build_sensor("VO2", None, number=900)
+    # Production drops the BreathingCycle column at parse time (see
+    # _parse.py:605–606), so the bundle has 8 channels, not 9.
+    vo2_subs = (
+        "Resp.Rate",
+        "TidalVol.",
+        "Ventilation(L/min)",
+        "FeO2(%)",
+        "VO2Absolute",
+        "AmbientPressure",
+        "FlowSensor",
+        "OxygenSensor",
+    )
+    sensor = _build_sensor("VO2", None, subchannels=vo2_subs, number=900)
     assert sensor.vo2master.signal_names == [
         "resp_rate",
         "tidal_vol",

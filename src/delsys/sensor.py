@@ -150,6 +150,61 @@ class Sensor:
                 assert mod.startswith("EMG")
                 self.emg = EMG(sig, **bundle_kwargs)
 
+    def __setstate__(self, state: dict) -> None:
+        """Auto-relabel bundles on unpickle.
+
+        Pickles produced before delsys 0.1.1 (or by the legacy
+        ``immersionToolbox/immersionlab/delsys.py`` shim) carry pysampled's
+        default ``signal_names=['s0', 's1', ...]`` / ``signal_coords=['x']``
+        labelling — and often an empty ``meta`` dict. Once the pickle is
+        loaded we have everything we need to rebuild the labels: the parent
+        ``Sensor`` retains ``number``, ``location``, ``modalities``, etc.
+        as plain attributes. Walk the attached bundles and re-stamp them
+        with the 0.1.1 convention, plus seed ``meta['sensor']`` so future
+        filter / clone operations propagate the sensor identity.
+
+        Idempotent: running on a fresh 0.1.1+ pickle produces identical
+        labels.
+
+        Per-:class:`Signal` ``meta`` (``modality`` / ``subchannel`` /
+        ``sensor``) is *not* recoverable from such old pickles — the bundle
+        view is sufficient for the typical ``lf.acc[i]`` / ``lf.emg[i]``
+        access pattern.
+        """
+        self.__dict__.update(state)
+        self._relabel_bundles()
+
+    def _relabel_bundles(self) -> None:
+        """Rebuild ``signal_names`` / ``signal_coords`` (and ``meta['sensor']``)
+        on every modality bundle attached to this :class:`Sensor`, using the
+        Sensor's own attributes as the source of truth.
+
+        Called from :meth:`__setstate__`; safe to call directly on a
+        live :class:`Sensor` to refresh labels.
+        """
+        if not hasattr(self, "modalities"):
+            return  # very-old / hand-built Sensor without modality info
+        sensor_info = SensorInfo(
+            name=getattr(self, "name", None),
+            modalities=self.modalities,
+            number=getattr(self, "number", 0),
+            type_sensorlog=getattr(self, "type_sensorlog", None),
+            lrc=getattr(self, "lrc", None),
+            location=getattr(self, "location", None),
+        )
+        for mod in self.modalities:
+            attr = _mod_to_attr(mod)
+            bundle = getattr(self, attr, None)
+            if bundle is None or not hasattr(bundle, "_sig"):
+                continue
+            n_channels = bundle._sig.shape[1] if bundle._sig.ndim == 2 else 1
+            names, coords = self._make_bundle_labels(mod, sensor_info, n_channels)
+            bundle.signal_names = names
+            bundle.signal_coords = coords
+            if not hasattr(bundle, "meta") or bundle.meta is None:
+                bundle.meta = {}
+            bundle.meta.setdefault("sensor", sensor_info)
+
     @staticmethod
     def _make_bundle_labels(
         mod: str, sensor_info: SensorInfo, n_channels: int

@@ -120,6 +120,66 @@ def test_log_pickle_roundtrip(fixtures_dir, tmp_path):
         assert isinstance(lf2.emg[0], EMG)
 
 
+def test_pickle_relabels_legacy_default_labels(fixtures_dir, tmp_path):
+    """Pickles produced before delsys 0.1.1 (or by the legacy
+    immersionToolbox shim) carry default ``['s0', ...] / ['x']`` labels
+    and an empty bundle ``meta``. ``Sensor.__setstate__`` repairs both
+    on unpickle, using the Sensor's own attributes as the source of truth.
+    """
+    lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
+
+    # Simulate stale state: wipe every bundle's labels and meta so it
+    # looks the way pre-0.1.1 pickles do on disk.
+    expected_after = {}  # (sensor_idx, attr) -> (names, coords)
+    for s_idx, sensor in enumerate(lf.sensors):
+        for attr in ("emg", "ekg", "acc", "gyro", "fsr", "analog", "vo2master", "hrstrap"):
+            bundle = getattr(sensor, attr, None)
+            if bundle is None:
+                continue
+            expected_after[(s_idx, attr)] = (
+                list(bundle.signal_names),
+                list(bundle.signal_coords),
+            )
+            n = bundle._sig.shape[1] if bundle._sig.ndim == 2 else 1
+            bundle.signal_names = [f"s{i}" for i in range(n)]
+            bundle.signal_coords = ["x"]
+            bundle.meta = {}
+
+    blob = pickle.dumps(lf)
+    lf2 = pickle.loads(blob)
+
+    # Every bundle is back to the 0.1.1 convention, and meta['sensor'] is
+    # populated so downstream filter / clone calls keep the sensor identity.
+    for (s_idx, attr), (names, coords) in expected_after.items():
+        bundle = getattr(lf2.sensors[s_idx], attr)
+        assert bundle.signal_names == names, f"sensor[{s_idx}].{attr} signal_names not restored"
+        assert bundle.signal_coords == coords, f"sensor[{s_idx}].{attr} signal_coords not restored"
+        assert bundle.meta.get("sensor") is not None, (
+            f"sensor[{s_idx}].{attr} meta['sensor'] not restored"
+        )
+        assert bundle.meta["sensor"].number == lf2.sensors[s_idx].number
+
+
+def test_pickle_relabel_preserves_existing_meta_keys(fixtures_dir, tmp_path):
+    """Relabel uses ``meta.setdefault('sensor', ...)`` so it must not stomp
+    pre-existing meta keys (e.g. EKG's cached rpeak indices)."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    assert lf.ekg, "discover170 fixture should have an EKG bundle"
+    ekg = lf.ekg[0]
+    ekg.meta["rpeaks_idx_default"] = [10, 20, 30]
+    # Wipe labels to mimic stale-pickle state but keep meta keys.
+    ekg.signal_names = ["s0"]
+    ekg.signal_coords = ["x"]
+
+    lf2 = pickle.loads(pickle.dumps(lf))
+    ekg2 = lf2.ekg[0]
+    assert ekg2.meta["rpeaks_idx_default"] == [10, 20, 30]
+    # Labels were rebuilt from defaults (the exact value depends on the
+    # fixture's channelmap; the point is they no longer look defaulted).
+    assert ekg2.signal_names != ["s0"]
+    assert ekg2.signal_coords == ["ekg"]
+
+
 # ---------------------------------------------------------------------------
 # sensor_name_replace (Discover) — full integration via Log()
 # ---------------------------------------------------------------------------

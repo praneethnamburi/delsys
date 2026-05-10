@@ -56,6 +56,21 @@ To regenerate this snapshot::
   than hardcoding their own — a single-axis IMU keeps its sensor name.
 - ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
   (previously dropped — minor pre-existing bug).
+- ✅ `Sensor.__setstate__` auto-relabels bundles on unpickle, so old
+  pickles produced before 0.1.1 (or by the legacy
+  `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
+  `signal_names` / `signal_coords` convention with no caller changes.
+
+### Known limitations carrying forward
+
+- **Per-`Signal` `meta` on very-old pickles is unrecoverable.** Pickles
+  produced before sensor metadata moved into `pysampled.Data.meta`
+  (i.e. ones where every `Signal` has `meta == {}`) lose
+  `signal.modality` / `signal.subchannel` / `signal.sensor` access.
+  Bundle-level access (`lf.acc[i]`, `lf.emg[i]`,
+  `bundle["LFoot_Heel"]`) is fully repaired by `Sensor.__setstate__`,
+  so this only bites code that walks `lf.signals` directly. Reloading
+  the original CSV is the workaround.
 
 ## Post-0.1.0 roadmap
 

@@ -56,6 +56,16 @@ missing.
 - All bundles in `Sensor.__init__` are now constructed with `axis=0`
   explicit so very short fixtures (e.g. a 1-row `(1, 8)` VO2 array)
   don't trip pysampled's `argmax`-based axis inference.
+- `Sensor.__setstate__` now auto-relabels every attached bundle on
+  unpickle, using the Sensor's own attributes (`number`, `location`,
+  `modalities`) as the source of truth. Pickled `Log`s saved with
+  delsys < 0.1.1 (or the legacy `immersionToolbox/immersionlab/delsys.py`
+  shim) come out with the new convention with no caller changes — no
+  `lf.relabel()` to remember. The relabel is idempotent on fresh 0.1.1+
+  pickles. Per-`Signal` `meta` (`modality` / `subchannel` / `sensor`)
+  is *not* recoverable from those very-old pickles; bundle-level
+  access (`lf.acc[i]`, `lf.emg[i]`, `bundle["LFoot_Heel"]`, etc.) is
+  what's repaired.
 - **Bug fix:** `Analog` and `HRStrap` bundles now carry
   `meta=sensor_meta`. Previously the `pysampled.Data(...)`
   constructions for these two modalities dropped the parent

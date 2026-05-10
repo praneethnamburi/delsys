@@ -102,15 +102,6 @@ into the package, with a clean splice-back into `lf.signals` /
   in `src/delsys/cleaning.py` alongside the dataclass. Matplotlib /
   scipy.signal.welch are imported lazily inside the helpers so
   `run_pipeline`-only callers don't pay the import cost.
-- `delsys.cleaning` re-exports the original symbol names from
-  `pn-projects/projects/emg_ica_cleaning.py`
-  (`EMGPipelineConfig` → `CleaningConfig`,
-  `EMGPipelineResult` → `CleaningResult`,
-  `fit_ica_emg` → `fit_ica`,
-  `score_ica_components_against_ekg` → `score_components_against_ekg`,
-  `run_emg_pipeline` → `run_pipeline`) as one-release-window aliases
-  so downstream callers can switch their import path with no other
-  changes.
 
 ### Fixed
 

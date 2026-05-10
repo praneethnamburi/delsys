@@ -40,27 +40,6 @@ To regenerate this snapshot::
 (Source filter, branch tracking, and exclude rules live in
 `[tool.coverage.run]` / `[tool.coverage.report]` in `pyproject.toml`.)
 
-## Shipped in 0.1.1 (2026-05-09)
-
-- ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality
-  bundle now carries meaningful `signal_names` / `signal_coords` derived
-  from the channelmap or sensor number, replacing the
-  `["s0","s1",...]` / `["x"]` defaults that pysampled would otherwise
-  fall through to. Restores correct `acc.magnitude()` semantics under
-  pysampled ≥ 1.2.0.
-- ✅ FSR / Quattro position-aware naming via the channelmap
-  parenthetical (e.g. `LFoot (1-Heel, ...)` →
-  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
-- ✅ `chN` fallback for sensors without a channelmap entry.
-- ✅ `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` inherit parent labels rather
-  than hardcoding their own — a single-axis IMU keeps its sensor name.
-- ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
-  (previously dropped — minor pre-existing bug).
-- ✅ `Sensor.__setstate__` auto-relabels bundles on unpickle, so old
-  pickles produced before 0.1.1 (or by the legacy
-  `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
-  `signal_names` / `signal_coords` convention with no caller changes.
-
 ## Shipped in 0.4.0 (2026-05-10)
 
 - ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report, splice_source)` —
@@ -102,8 +81,6 @@ To regenerate this snapshot::
   `tutorials/data/taichi_trial5_6s.csv` and matching reference
   PDF — 6 s slice of a real TaiChi recording (every sensor kept), big
   enough for ICA to converge cleanly.
-- ✅ Original symbol names re-exported as one-release-window aliases
-  for source-compatibility with `pn-projects/projects/emg_ica_cleaning.py`.
 - ✅ Defensive guards for very-old pickles: `_normalize_signal_lengths`
   reads `meta.get("modality")` instead of the hard property; the
   splice-back updates `sensor.emg` directly via `pysampled.Data._clone`
@@ -152,6 +129,27 @@ To regenerate this snapshot::
   `NotImplementedError` on multi-channel input (was silent
   column-major flatten).
 
+## Shipped in 0.1.1 (2026-05-09)
+
+- ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality
+  bundle now carries meaningful `signal_names` / `signal_coords` derived
+  from the channelmap or sensor number, replacing the
+  `["s0","s1",...]` / `["x"]` defaults that pysampled would otherwise
+  fall through to. Restores correct `acc.magnitude()` semantics under
+  pysampled ≥ 1.2.0.
+- ✅ FSR / Quattro position-aware naming via the channelmap
+  parenthetical (e.g. `LFoot (1-Heel, ...)` →
+  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
+- ✅ `chN` fallback for sensors without a channelmap entry.
+- ✅ `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` inherit parent labels rather
+  than hardcoding their own — a single-axis IMU keeps its sensor name.
+- ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
+  (previously dropped — minor pre-existing bug).
+- ✅ `Sensor.__setstate__` auto-relabels bundles on unpickle, so old
+  pickles produced before 0.1.1 (or by the legacy
+  `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
+  `signal_names` / `signal_coords` convention with no caller changes.
+
 ### Followups (target 0.5.0)
 
 - **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
@@ -166,10 +164,6 @@ To regenerate this snapshot::
   offline `_run_pipeline_realtime` from the source if a real
   streaming workflow shows up. Offline-only was the deliberate v1
   scope.
-- **Drop the back-compat aliases in `delsys.cleaning`**
-  (`EMGPipelineConfig` / `EMGPipelineResult` / `fit_ica_emg` /
-  `score_ica_components_against_ekg` / `run_emg_pipeline`) once
-  downstream callers have migrated to the canonical names.
 
 ### Known limitations carrying forward
 

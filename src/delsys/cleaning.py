@@ -1654,29 +1654,6 @@ def _open_components_review_window(
         plt.show()
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat aliases (one release window).
-# ---------------------------------------------------------------------------
-
-#: Alias for :class:`CleaningConfig` — original name from
-#: ``pn-projects/projects/emg_ica_cleaning.py``. Kept for one release
-#: window so downstream code switching to ``delsys.cleaning`` need only
-#: change its import path. Prefer :class:`CleaningConfig` in new code.
-EMGPipelineConfig = CleaningConfig
-
-#: Alias for :class:`CleaningResult`. See :data:`EMGPipelineConfig`.
-EMGPipelineResult = CleaningResult
-
-#: Alias for :func:`fit_ica`. See :data:`EMGPipelineConfig`.
-fit_ica_emg = fit_ica
-
-#: Alias for :func:`score_components_against_ekg`. See :data:`EMGPipelineConfig`.
-score_ica_components_against_ekg = score_components_against_ekg
-
-#: Alias for :func:`run_pipeline`. See :data:`EMGPipelineConfig`.
-run_emg_pipeline = run_pipeline
-
-
 __all__ = [
     "ICAResult",
     "CleaningConfig",
@@ -1689,10 +1666,4 @@ __all__ = [
     "regress_out_motion_from_emg",
     "harmonize_multirate_inputs",
     "run_pipeline",
-    # back-compat aliases
-    "EMGPipelineConfig",
-    "EMGPipelineResult",
-    "fit_ica_emg",
-    "score_ica_components_against_ekg",
-    "run_emg_pipeline",
 ]

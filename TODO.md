@@ -40,6 +40,23 @@ To regenerate this snapshot::
 (Source filter, branch tracking, and exclude rules live in
 `[tool.coverage.run]` / `[tool.coverage.report]` in `pyproject.toml`.)
 
+## Shipped in 0.1.1 (2026-05-09)
+
+- ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality
+  bundle now carries meaningful `signal_names` / `signal_coords` derived
+  from the channelmap or sensor number, replacing the
+  `["s0","s1",...]` / `["x"]` defaults that pysampled would otherwise
+  fall through to. Restores correct `acc.magnitude()` semantics under
+  pysampled ≥ 1.2.0.
+- ✅ FSR / Quattro position-aware naming via the channelmap
+  parenthetical (e.g. `LFoot (1-Heel, ...)` →
+  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
+- ✅ `chN` fallback for sensors without a channelmap entry.
+- ✅ `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` inherit parent labels rather
+  than hardcoding their own — a single-axis IMU keeps its sensor name.
+- ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
+  (previously dropped — minor pre-existing bug).
+
 ## Post-0.1.0 roadmap
 
 - **EMG/EKG artifact cleaning at the `Log` level.** Port `C:\dev\pn-projects\projects\emg_ica_cleaning.py` (multi-stage pipeline: harmonization → preprocess → ICA-based ECG suppression with auto-component-detection by lagged correlation → ACC-guided motion regression with safety gates) into `delsys` as a `Log.clean_emg_ekg_artifact(...)` method. The integration work is to (a) gather all EMG `Signal`s + the EKG `Signal` (and optional per-EMG ACC predictors) from `lf`, (b) run the pipeline, (c) splice cleaned samples back into `lf.signals` per channel and rebuild affected `EMG` bundles in `lf.sensors[*].emg`, since `EMG._sig` is constructed by stacking signals at `Sensor.__init__` time. The previous ACC-only `ica.py` was removed in 0.1.0 because it didn't serve this stated primary purpose.

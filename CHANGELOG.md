@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-09
+
+Non-breaking metadata enrichment that also restores correct
+`Data.magnitude()` semantics for downstream callers depending on
+[pysampled](https://github.com/praneethnamburi/pysampled) ≥ 1.2.0
+(per-`signal_name` L2). Existing pickles still unpickle fine —
+`pysampled.Data.__setstate__` rebuilds defaults when the new fields are
+missing.
+
+### Added
+
+- `delsys._util._trim_location` / `_canonical_label` /
+  `_parse_fsr_quattro_positions` — small helpers used by
+  `Sensor.__init__` to derive bundle labels from the channelmap.
+- `Sensor._make_bundle_labels` — single source of truth for the
+  per-modality `(signal_names, signal_coords)` convention:
+
+  | Modality        | `signal_names`                                  | `signal_coords` |
+  |-----------------|-------------------------------------------------|-----------------|
+  | ACC / GYRO      | `[trimmed_location]`                            | `["x","y","z"]` |
+  | EMGS            | `[loc]`                                         | `["emg"]`       |
+  | EMGD            | `[loc_A, loc_B]`                                | `["emg"]`       |
+  | EMGQ            | parsed positions, else `[loc_A..D]`             | `["emg"]`       |
+  | FSR             | parsed positions, else `[loc_A..D]`             | `["fsr"]`       |
+  | EKG             | `[loc]`                                         | `["ekg"]`       |
+  | Analog          | `[loc]` (1ch) or `[loc_A..D]` (multi-ch sync)   | `["analog"]`    |
+  | VO2             | 8 fixed names                                   | `["value"]`     |
+  | HR              | `["heart_rate"]`                                | `["bpm"]`       |
+
+- FSR / Quattro position-aware naming via the channelmap parenthetical
+  (e.g. `LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)` →
+  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
+- `chN` fallback for sensors without a channelmap entry — keeps every
+  bundle uniquely labelled.
+- New `tests/test_util.py` plus extensions to `tests/test_signals.py`
+  and `tests/test_log.py` covering the new label conventions, the
+  inheritance change, and end-to-end propagation through `Log()`.
+
+### Changed
+
+- `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` no longer hardcode their
+  `signal_names`; they inherit the parent's labels and only override the
+  field that actually differs (single coord for `IMU.x/y/z`,
+  parent-indexed name for `FSR` / `VO2Master`). Effect:
+  `imu.x.signal_names == imu.signal_names`, and a single-axis `IMU`
+  carries its sensor identity through downstream chains.
+- All bundles in `Sensor.__init__` are now constructed with `axis=0`
+  explicit so very short fixtures (e.g. a 1-row `(1, 8)` VO2 array)
+  don't trip pysampled's `argmax`-based axis inference.
+- **Bug fix:** `Analog` and `HRStrap` bundles now carry
+  `meta=sensor_meta`. Previously the `pysampled.Data(...)`
+  constructions for these two modalities dropped the parent
+  `SensorInfo`, contradicting the `lf.analog[i].sensor.location`
+  contract documented elsewhere in the API.
+
+### Provenance
+
+This release is the metadata complement to pysampled 1.2.0's
+per-`signal_name` `magnitude()` change: with default labelling, every
+downstream `acc.magnitude()` call in `pn-projects/wobble` would have
+returned three independent per-axis abs values instead of the global
+L2. Bundle-level labels make the original semantics work again — no
+code change required at the call sites.
+
+## [0.1.0] - 2026-05-09
+
 First public release. The package is a standalone extraction and polish of the
 Delsys CSV loader that previously lived in
 `immersionToolbox/immersionlab/delsys.py` for several years. The

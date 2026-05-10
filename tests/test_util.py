@@ -1,11 +1,45 @@
 """Tests for ``delsys._util`` — modality dispatch and label-helper helpers."""
 
+import numpy as np
+import pytest
+
+from delsys._metadata import SensorInfo
 from delsys._util import (
+    _DRIFT_TOLERANCE,
     _canonical_label,
     _mod_to_attr,
+    _normalize_signal_lengths,
     _parse_fsr_quattro_positions,
     _trim_location,
 )
+from delsys.signals import Signal
+
+
+def _make_signal(
+    n_samples: int,
+    *,
+    modality: str = "EMGS",
+    subchannel: str = "A",
+    sensor_number: int = 1,
+    sr: float = 1920.0,
+    t0: float = 0.0,
+) -> Signal:
+    """Construct a synthetic :class:`Signal` for tests that need raw signals
+    without going through a CSV fixture."""
+    sensor_info = SensorInfo(
+        name=f"S{sensor_number}",
+        modalities={modality},
+        number=sensor_number,
+        type_sensorlog=None,
+        lrc=None,
+        location=None,
+    )
+    return Signal(
+        np.arange(n_samples, dtype=float),
+        sr,
+        t0=t0,
+        meta={"sensor": sensor_info, "modality": modality, "subchannel": subchannel},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -133,3 +167,84 @@ def test_parse_fsr_positions_collision_returns_none():
         )
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# _normalize_signal_lengths — tail-trim same-(modality, sr) signals to a
+# common length, eliminating the post-resample drift that otherwise trips
+# Sensor.__init__'s len(np.unique([len(s)])) == 1 assert.
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_lengths_within_group_trims_to_min():
+    signals = [
+        _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1),
+        _make_signal(99, modality="EMGS", subchannel="A", sensor_number=2),
+    ]
+    out = _normalize_signal_lengths(signals)
+    assert [len(s) for s in out] == [99, 99]
+    # _t0 unchanged for both — tail-trim preserves the start time.
+    assert all(s._t0 == 0.0 for s in out)
+
+
+def test_normalize_lengths_no_drift_is_noop():
+    signals = [
+        _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1),
+        _make_signal(100, modality="EMGS", subchannel="A", sensor_number=2),
+    ]
+    out = _normalize_signal_lengths(signals)
+    assert [len(s) for s in out] == [100, 100]
+    # Values match exactly — no tail-trim happened.
+    for orig, new in zip(signals, out):
+        np.testing.assert_array_equal(orig(), new())
+
+
+def test_normalize_lengths_across_modality_independent():
+    # Drift in EMGS group must not trim the ACC group.
+    signals = [
+        _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1, sr=1920.0),
+        _make_signal(99, modality="EMGS", subchannel="A", sensor_number=2, sr=1920.0),
+        _make_signal(50, modality="ACC", subchannel="X", sensor_number=3, sr=148.0),
+        _make_signal(50, modality="ACC", subchannel="X", sensor_number=4, sr=148.0),
+    ]
+    out = _normalize_signal_lengths(signals)
+    lens = [len(s) for s in out]
+    assert lens == [99, 99, 50, 50]
+
+
+def test_normalize_lengths_across_sr_independent():
+    # Same modality, different sr => independent groups.
+    signals = [
+        _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1, sr=1920.0),
+        _make_signal(99, modality="EMGS", subchannel="A", sensor_number=2, sr=1920.0),
+        _make_signal(60, modality="EMGS", subchannel="A", sensor_number=3, sr=2000.0),
+    ]
+    out = _normalize_signal_lengths(signals)
+    lens = [len(s) for s in out]
+    assert lens == [99, 99, 60]
+
+
+def test_normalize_lengths_warns_on_excessive_drift():
+    n_long = 100
+    n_short = 100 - (_DRIFT_TOLERANCE + 1)
+    signals = [
+        _make_signal(n_long, modality="EMGS", subchannel="A", sensor_number=1),
+        _make_signal(n_short, modality="EMGS", subchannel="A", sensor_number=2),
+    ]
+    with pytest.warns(UserWarning):
+        _normalize_signal_lengths(signals)
+
+
+def test_normalize_lengths_preserves_meta_and_history():
+    signals = [
+        _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1),
+        _make_signal(99, modality="EMGS", subchannel="A", sensor_number=2),
+    ]
+    # Stamp some custom history on the longer signal so we can confirm it
+    # propagates through the tail-trim clone.
+    signals[0]._history.append(("custom-step", {"k": "v"}))
+    out = _normalize_signal_lengths(signals)
+    assert out[0].meta["modality"] == "EMGS"
+    assert out[0].meta["subchannel"] == "A"
+    assert out[0].sensor.number == 1
+    assert ("custom-step", {"k": "v"}) in out[0]._history

@@ -424,6 +424,77 @@ def test_fsr_channel_inherits_fallback_letters():
     assert fsr.d.signal_names == ["LFoot_D"]
 
 
+# ---------------------------------------------------------------------------
+# 0.2.0: ``.sensors`` (plural) property unifies per-Sensor and aggregate views
+# ---------------------------------------------------------------------------
+
+
+def test_bundle_sensors_property_per_sensor():
+    """Per-Sensor bundles carry meta['sensor'] (singular). The new ``.sensors``
+    plural property returns a length-1 list with that record so user code can
+    treat both views uniformly."""
+    sensor = _build_sensor("ACC", "LBicep")
+    acc = sensor.acc
+    assert acc.sensor is not None
+    assert acc.sensors == [acc.sensor]
+
+
+def test_bundle_sensors_property_aggregate():
+    """Aggregate bundles carry meta['sensors'] (plural). ``.sensors`` returns
+    the list aligned with signal_names."""
+    si_l = _sensor_info({"ACC"}, number=1, location="L")
+    si_r = _sensor_info({"ACC"}, number=2, location="R")
+    sig = np.zeros((100, 6))
+    agg = IMU(
+        sig,
+        sr=120.0,
+        axis=0,
+        t0=0.0,
+        meta={"sensors": [si_l, si_r]},
+        signal_names=["L", "R"],
+        signal_coords=["x", "y", "z"],
+    )
+    assert agg.sensors == [si_l, si_r]
+    # ``sensor`` (singular) returns None on aggregate views since there's no
+    # one-to-one mapping.
+    assert agg.sensor is None
+
+
+def test_bundle_sensors_property_on_emg():
+    """``.sensors`` lives on every modality bundle, not just IMU."""
+    sensor = _build_sensor("EMGS", "LBrachialis")
+    emg = sensor.emg
+    assert emg.sensors == [emg.sensor]
+
+
+def test_bundle_sensors_property_on_ekg():
+    sensor = _build_sensor("EKG", "Chest")
+    ekg = sensor.ekg
+    assert ekg.sensors == [ekg.sensor]
+
+
+def test_bundle_sensors_property_on_fsr():
+    sensor = _build_sensor("FSR", "LFoot")
+    fsr = sensor.fsr
+    assert fsr.sensors == [fsr.sensor]
+
+
+def test_bundle_sensors_property_on_vo2master():
+    vo2_subs = (
+        "Resp.Rate",
+        "TidalVol.",
+        "Ventilation(L/min)",
+        "FeO2(%)",
+        "VO2Absolute",
+        "AmbientPressure",
+        "FlowSensor",
+        "OxygenSensor",
+    )
+    sensor = _build_sensor("VO2", None, subchannels=vo2_subs, number=900)
+    vo2 = sensor.vo2master
+    assert vo2.sensors == [vo2.sensor]
+
+
 def test_vo2master_channel_inherits_parent_coords():
     """VO2Master.* carry the parent's i-th signal name and the parent's coords."""
     vo2_subs = (

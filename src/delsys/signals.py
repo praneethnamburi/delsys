@@ -16,12 +16,30 @@ The metadata namedtuples (``SensorLog`` and ``SensorInfo``) live in
 :mod:`delsys._metadata`.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 import pysampled
 
 from delsys._metadata import SensorInfo
 from delsys._util import _mod_to_attr
+
+
+def _bundle_sensors(bundle: "pysampled.Data") -> List[SensorInfo]:
+    """Resolve a modality bundle's per-channel sensor metadata.
+
+    Aggregate bundles store ``meta['sensors']`` (plural, aligned with
+    ``signal_names``); per-Sensor bundles store ``meta['sensor']``
+    (singular). This helper unifies both views by returning a list — a
+    length-1 list for the per-Sensor case — so user code can iterate
+    sensor records uniformly regardless of which shape it has.
+    """
+    if not isinstance(bundle.meta, dict):
+        return []
+    if "sensors" in bundle.meta:
+        return list(bundle.meta["sensors"])
+    if "sensor" in bundle.meta and bundle.meta["sensor"] is not None:
+        return [bundle.meta["sensor"]]
+    return []
 
 
 class Signal(pysampled.Data):
@@ -55,6 +73,14 @@ class Signal(pysampled.Data):
     def sensor(self) -> Optional[SensorInfo]:
         """The :class:`SensorInfo` record, or ``None`` if not set."""
         return self.meta.get("sensor") if self.meta else None
+
+    @property
+    def sensors(self) -> List[SensorInfo]:
+        """All :class:`SensorInfo` records this signal carries.
+
+        See :func:`_bundle_sensors`.
+        """
+        return _bundle_sensors(self)
 
     @property
     def modality(self) -> str:
@@ -107,8 +133,21 @@ class IMU(pysampled.Data):
 
     @property
     def sensor(self) -> Optional[SensorInfo]:
-        """The :class:`SensorInfo` record, or ``None`` if not set."""
+        """The :class:`SensorInfo` record, or ``None`` if not set.
+
+        For aggregate views (``Log.acc`` / ``Log.gyro`` spanning multiple
+        sensors) this returns ``None``; use :attr:`sensors` (plural) to
+        get the per-channel list.
+        """
         return self.meta.get("sensor") if self.meta else None
+
+    @property
+    def sensors(self) -> List[SensorInfo]:
+        """All :class:`SensorInfo` records this bundle carries.
+
+        See :func:`_bundle_sensors`.
+        """
+        return _bundle_sensors(self)
 
     @property
     def shape(self) -> tuple:
@@ -146,8 +185,20 @@ class FSR(pysampled.Data):
 
     @property
     def sensor(self) -> Optional[SensorInfo]:
-        """The :class:`SensorInfo` record, or ``None`` if not set."""
+        """The :class:`SensorInfo` record, or ``None`` if not set.
+
+        ``None`` on aggregate views — use :attr:`sensors` (plural) to get
+        the per-channel list.
+        """
         return self.meta.get("sensor") if self.meta else None
+
+    @property
+    def sensors(self) -> List[SensorInfo]:
+        """All :class:`SensorInfo` records this bundle carries.
+
+        See :func:`_bundle_sensors`.
+        """
+        return _bundle_sensors(self)
 
     @property
     def shape(self) -> tuple:
@@ -203,8 +254,20 @@ class VO2Master(pysampled.Data):
 
     @property
     def sensor(self) -> Optional[SensorInfo]:
-        """The :class:`SensorInfo` record, or ``None`` if not set."""
+        """The :class:`SensorInfo` record, or ``None`` if not set.
+
+        ``None`` on aggregate views — use :attr:`sensors` (plural) to get
+        the per-channel list.
+        """
         return self.meta.get("sensor") if self.meta else None
+
+    @property
+    def sensors(self) -> List[SensorInfo]:
+        """All :class:`SensorInfo` records this bundle carries.
+
+        See :func:`_bundle_sensors`.
+        """
+        return _bundle_sensors(self)
 
     @property
     def shape(self) -> tuple:

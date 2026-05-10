@@ -19,6 +19,7 @@ import numpy as np
 import pysampled
 
 from delsys._metadata import SensorInfo
+from delsys.signals import _bundle_sensors
 
 
 class EKG(pysampled.Data):
@@ -86,8 +87,20 @@ class EKG(pysampled.Data):
 
     @property
     def sensor(self) -> Optional[SensorInfo]:
-        """The :class:`SensorInfo` record, or ``None`` if not set."""
+        """The :class:`SensorInfo` record, or ``None`` if not set.
+
+        ``None`` on aggregate views — use :attr:`sensors` (plural) to get
+        the per-channel list.
+        """
         return self.meta.get("sensor") if self.meta else None
+
+    @property
+    def sensors(self) -> List[SensorInfo]:
+        """All :class:`SensorInfo` records this bundle carries.
+
+        See :func:`delsys.signals._bundle_sensors`.
+        """
+        return _bundle_sensors(self)
 
     @property
     def shape(self) -> tuple:

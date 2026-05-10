@@ -40,6 +40,27 @@ To regenerate this snapshot::
 (Source filter, branch tracking, and exclude rules live in
 `[tool.coverage.run]` / `[tool.coverage.report]` in `pyproject.toml`.)
 
+## Shipped in 0.1.1 (2026-05-09)
+
+- ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality
+  bundle now carries meaningful `signal_names` / `signal_coords` derived
+  from the channelmap or sensor number, replacing the
+  `["s0","s1",...]` / `["x"]` defaults that pysampled would otherwise
+  fall through to. Restores correct `acc.magnitude()` semantics under
+  pysampled ≥ 1.2.0.
+- ✅ FSR / Quattro position-aware naming via the channelmap
+  parenthetical (e.g. `LFoot (1-Heel, ...)` →
+  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
+- ✅ `chN` fallback for sensors without a channelmap entry.
+- ✅ `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` inherit parent labels rather
+  than hardcoding their own — a single-axis IMU keeps its sensor name.
+- ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
+  (previously dropped — minor pre-existing bug).
+- ✅ `Sensor.__setstate__` auto-relabels bundles on unpickle, so old
+  pickles produced before 0.1.1 (or by the legacy
+  `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
+  `signal_names` / `signal_coords` convention with no caller changes.
+
 ## Shipped in 0.2.0 (2026-05-10)
 
 - ✅ `Log.<modality>` accessors return a single aggregated bundle per
@@ -78,27 +99,6 @@ To regenerate this snapshot::
 - **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
   once pysampled ships those classmethods (deferred from pysampled
   1.2.0).
-
-## Shipped in 0.1.1 (2026-05-09)
-
-- ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality
-  bundle now carries meaningful `signal_names` / `signal_coords` derived
-  from the channelmap or sensor number, replacing the
-  `["s0","s1",...]` / `["x"]` defaults that pysampled would otherwise
-  fall through to. Restores correct `acc.magnitude()` semantics under
-  pysampled ≥ 1.2.0.
-- ✅ FSR / Quattro position-aware naming via the channelmap
-  parenthetical (e.g. `LFoot (1-Heel, ...)` →
-  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
-- ✅ `chN` fallback for sensors without a channelmap entry.
-- ✅ `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` inherit parent labels rather
-  than hardcoding their own — a single-axis IMU keeps its sensor name.
-- ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
-  (previously dropped — minor pre-existing bug).
-- ✅ `Sensor.__setstate__` auto-relabels bundles on unpickle, so old
-  pickles produced before 0.1.1 (or by the legacy
-  `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
-  `signal_names` / `signal_coords` convention with no caller changes.
 
 ### Known limitations carrying forward
 

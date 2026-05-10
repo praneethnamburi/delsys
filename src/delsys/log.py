@@ -539,13 +539,17 @@ class Log:
         motion: Optional[Union[str, Dict[int, Union[int, str]]]] = "auto",
         in_place: bool = True,
         generate_report: bool = True,
+        splice_source: str = "combined",
     ) -> CleaningResult:
         """Clean ECG and motion artifact from every EMG channel in this Log.
 
         Stages:
 
-        1. **Gather** — :attr:`emg` + :attr:`ekg` + (optional) per-EMG ACC
-           predictors resolved from ``motion``.
+        1. **Gather** — :attr:`emg` (with :meth:`pysampled.Data.shift_baseline`
+           applied so the per-channel dB metrics in the report reflect
+           the cleaning's effect on the AC signal rather than a constant
+           offset in the raw input) + :attr:`ekg` + (optional) per-EMG
+           ACC predictors resolved from ``motion``.
         2. **Harmonize** — defensively resample EMG / EKG / ACC to the
            EMG bundle's sampling rate. EMG passes through unchanged; the
            rest are tail-trimmed to a common length.
@@ -556,7 +560,10 @@ class Log:
         4. **Splice-back** — when ``in_place=True`` (default), replace
            the EMG samples in :attr:`signals` and rebuild every sensor
            that carries EMG so :attr:`emg` and :attr:`sensors[*].emg`
-           reflect the cleaned data on next access.
+           reflect the cleaned data on next access. Note that the
+           baseline-shift in step 1 is part of what gets spliced back,
+           so any DC offset in the raw EMG is permanently removed once
+           ``clean_emg_ekg_artifact()`` runs in place.
 
         Args:
             config: Pipeline knobs. Defaults to :class:`CleaningConfig`'s
@@ -586,6 +593,20 @@ class Log:
                 Equivalent to calling
                 :meth:`CleaningResult.generate_report` on the returned
                 result. Pass ``False`` to skip the PDF step.
+            splice_source: Which cleaned variant to splice back into
+                :attr:`signals` when ``in_place=True``. One of
+                ``"combined"`` (default — :attr:`CleaningResult.cleaned_emg`,
+                preprocess + ECG + motion), ``"ekgonly"``
+                (:attr:`CleaningResult.cleaned_emg_ekgonly`, preprocess +
+                ECG only), or ``"motiononly"``
+                (:attr:`CleaningResult.cleaned_emg_motiononly`,
+                preprocess + motion only). Use
+                ``splice_source="ekgonly"`` when the motion stage is
+                doing more harm than good on a particular trial, or
+                ``"motiononly"`` to keep just the motion regression.
+                Ignored when ``in_place=False``. The auto-report runs
+                *after* the splice-back, so the per-channel pages
+                reflect what ``lf.emg`` will look like.
 
         Returns:
             :class:`CleaningResult` containing the cleaned EMG matrix,
@@ -625,7 +646,11 @@ class Log:
         if self.emg is None:
             raise ValueError("Log has no EMG bundle to clean.")
 
-        emg_bundle = self.emg
+        # Shift the baseline up front so the per-channel dB metrics in
+        # the report reflect the cleaning's effect on the AC signal rather
+        # than a constant offset in the raw input. This also feeds a
+        # better-conditioned matrix into FastICA.
+        emg_bundle = self.emg.shift_baseline()
         emg_sr = float(emg_bundle.sr)
         emg_2d = np.asarray(emg_bundle())
 
@@ -705,7 +730,23 @@ class Log:
         result.feature_names = list(feature_names)
 
         if in_place:
-            self._splice_emg_back(result.cleaned_emg, emg_layout)
+            splice_choices = {
+                "combined": result.cleaned_emg,
+                "ekgonly": result.cleaned_emg_ekgonly,
+                "motiononly": result.cleaned_emg_motiononly,
+            }
+            if splice_source not in splice_choices:
+                raise ValueError(
+                    f"splice_source must be one of {sorted(splice_choices)}; "
+                    f"got {splice_source!r}."
+                )
+            chosen = splice_choices[splice_source]
+            if chosen is None:
+                raise ValueError(
+                    f"splice_source={splice_source!r} requested but "
+                    f"the corresponding stage didn't run (variant is None)."
+                )
+            self._splice_emg_back(np.asarray(chosen), emg_layout)
 
         if generate_report:
             result.generate_report()

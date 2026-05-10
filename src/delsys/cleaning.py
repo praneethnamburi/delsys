@@ -162,6 +162,13 @@ class CleaningResult:
             :class:`Log.clean_emg_ekg_artifact` so that
             :meth:`generate_report` can default to a sibling of the
             input file.
+        ica: Full :class:`ICAResult` from the ECG stage (model, sources,
+            mixing matrix, feature names). ``None`` when the ECG stage
+            didn't run. Used by :meth:`review_components`.
+        ica_input_feature_names: Per-input-row labels for ``ica.mixing``
+            — the EMG channel names with ``"EKG"`` appended as the last
+            entry. ``None`` when the ECG stage didn't run. Distinct from
+            :attr:`feature_names` (EMG only).
     """
 
     cleaned_emg: np.ndarray
@@ -174,6 +181,8 @@ class CleaningResult:
     cleaned_emg_motiononly: Optional[np.ndarray] = None
     feature_names: Optional[List[str]] = None
     fname: Optional[str] = None
+    ica: Optional["ICAResult"] = None
+    ica_input_feature_names: Optional[List[str]] = None
 
     def generate_report(self, path: Optional[Union[str, Path]] = None) -> Path:
         """Write a multi-page PDF report summarizing the cleaning result.
@@ -208,6 +217,40 @@ class CleaningResult:
                 shown in ranked-by-attenuation order.
         """
         _open_review_window(self, channels=channels)
+
+    def review_components(self, *, components: Optional[List[int]] = None) -> None:
+        """Open an interactive viewer over the ICA components.
+
+        Four stacked panels per component — the IC time course on top
+        and the three input signals it most contributes to (ranked by
+        ``|A[i, c]|``, the absolute mixing-matrix coefficient). Use to
+        decide whether to manually add or drop a component from the
+        auto-detected set in
+        :attr:`CleaningConfig.ecg_components_to_remove`.
+
+        For unit-variance ICA sources the ranking by ``|A[i, c]|`` is
+        proportional to ``corr(sources[:, c], input[:, i]) * std(input[:, i])``,
+        so it matches "input signals this IC shows up in most" up to
+        per-input-variance scaling. Pure-correlation ranking (without
+        the std factor) needs to be computed by hand.
+
+        Key bindings:
+
+        * ``→`` / ``n`` — next component (wrap)
+        * ``←`` / ``p`` — previous component (wrap)
+        * ``home`` / ``end`` — first / last
+        * ``q`` — close
+
+        Args:
+            components: Optional list of IC indices to cycle through.
+                When ``None`` (default), every component is shown in
+                index order.
+
+        Raises:
+            ValueError: If the ECG stage did not run (no ICA result to
+                review).
+        """
+        _open_components_review_window(self, components=components)
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +794,9 @@ def _run_ecg_stage(
     """
     ecg_input = np.column_stack([pre_emg, np.asarray(ekg_1d).reshape(-1)])
     feat_with_ekg = (
-        feature_names + ["EKG"] if feature_names is not None else None
+        list(feature_names) + ["EKG"]
+        if feature_names is not None
+        else [f"ch{i}" for i in range(pre_emg.shape[1])] + ["EKG"]
     )
     ica_result = fit_ica(
         ecg_input,
@@ -803,6 +848,8 @@ def _run_ecg_stage(
         "ic_ekg_corr_scores": ic_corr_scores,
         "ic_ekg_best_lags": ic_best_lags,
         "regression_beta": regression_beta,
+        "ica_result": ica_result,
+        "ica_input_feature_names": feat_with_ekg,
     }
 
 
@@ -862,6 +909,8 @@ def run_pipeline(
 
     post_ecg = pre
     ecg_ran = False
+    ica_result: Optional[ICAResult] = None
+    ica_input_feature_names: Optional[List[str]] = None
     if cfg.use_ecg_stage and ekg_1d is not None:
         ecg_stage = _run_ecg_stage(pre, np.asarray(ekg_1d), cfg, feature_names)
         post_ecg = ecg_stage["cleaned_emg"]
@@ -872,7 +921,10 @@ def run_pipeline(
             "auto_ekg_components_removed": ecg_stage["auto_ekg_components_removed"],
             "ic_ekg_corr_scores": ecg_stage["ic_ekg_corr_scores"],
             "ic_ekg_best_lags": ecg_stage["ic_ekg_best_lags"],
+            "corr_threshold": cfg.ecg_corr_threshold,
         }
+        ica_result = ecg_stage["ica_result"]
+        ica_input_feature_names = ecg_stage["ica_input_feature_names"]
         ecg_ran = True
     else:
         diagnostics["ecg"] = {"used": False}
@@ -936,6 +988,8 @@ def run_pipeline(
         cleaned_emg_ekgonly=cleaned_emg_ekgonly,
         cleaned_emg_motiononly=cleaned_emg_motiononly,
         feature_names=list(feature_names) if feature_names is not None else None,
+        ica=ica_result,
+        ica_input_feature_names=ica_input_feature_names,
     )
 
 
@@ -1018,6 +1072,20 @@ def _channel_ecg_band_db(raw_col: np.ndarray, cleaned_col: np.ndarray, sr: float
     return 10.0 * np.log10(max(p_cleaned, 1e-30) / max(p_raw, 1e-30))
 
 
+def _channel_motion_db(post_ecg_col: np.ndarray, cleaned_col: np.ndarray) -> float:
+    """Total-power dB attributable to the motion stage on one channel.
+
+    Compares ``var(cleaned)`` to ``var(post_ecg)`` so the result reflects
+    only what the motion regression added on top of the ECG-cleaned
+    signal. When the ECG stage didn't run, ``post_ecg`` is the
+    preprocessed signal and the metric collapses to "motion-only" dB.
+    """
+    return 10.0 * np.log10(
+        max(float(np.var(cleaned_col)), 1e-30)
+        / max(float(np.var(post_ecg_col)), 1e-30)
+    )
+
+
 def _resolve_default_report_path(result: "CleaningResult") -> Path:
     if result.fname is None:
         raise ValueError(
@@ -1032,6 +1100,13 @@ def _build_summary_rows(result: "CleaningResult") -> Tuple[List[int], List[Dict[
     cleaned = np.asarray(result.cleaned_emg)
     sr = float(result.sr)
 
+    # The motion-stage dB column compares cleaned vs post_ecg. When the
+    # ECG stage didn't run, fall back to the preprocessed snapshot so
+    # the value still reflects what the motion regression added.
+    motion_baseline = np.asarray(
+        result.stages.get("post_ecg", result.stages.get("preprocessed", cleaned))
+    )
+
     ranked = _rank_channels_by_attenuation(raw, cleaned)
     rows: List[Dict[str, Any]] = []
     for rank, ch in enumerate(ranked):
@@ -1042,6 +1117,7 @@ def _build_summary_rows(result: "CleaningResult") -> Tuple[List[int], List[Dict[
                 "label": _channel_label(result, ch),
                 "total_db": _channel_total_db(raw[:, ch], cleaned[:, ch]),
                 "ecg_db": _channel_ecg_band_db(raw[:, ch], cleaned[:, ch], sr),
+                "motion_db": _channel_motion_db(motion_baseline[:, ch], cleaned[:, ch]),
                 "motion": _motion_outcome_for_channel(result.diagnostics, ch),
             }
         )
@@ -1125,22 +1201,113 @@ def _draw_summary_page(fig, result: "CleaningResult", rows: List[Dict[str, Any]]
     cell_text = [
         [
             str(r["rank"]),
+            str(r["channel"]),
             r["label"],
             f"{r['total_db']:+.2f}",
             f"{r['ecg_db']:+.2f}",
+            f"{r['motion_db']:+.2f}",
             r["motion"],
         ]
         for r in rows
     ]
     table = ax.table(
         cellText=cell_text,
-        colLabels=["rank", "channel", "total dB", "ecg-band dB", "motion"],
+        colLabels=[
+            "rank",
+            "channel",
+            "location",
+            "total dB",
+            "ecg-band dB",
+            "motion dB",
+            "motion outcome",
+        ],
         loc="upper center",
         cellLoc="center",
     )
     table.auto_set_font_size(False)
     table.set_fontsize(8)
     table.scale(1.0, 1.1)
+
+
+def _draw_diagnostics_page(
+    fig, result: "CleaningResult", cfg_threshold: Optional[float] = None
+) -> None:
+    """Render the ECG-stage diagnostics page (page 1 of the PDF)."""
+    fig.clf()
+
+    ecg_diag = result.diagnostics.get("ecg") or {}
+    ekg_used = ecg_diag.get("used", True)
+
+    n_samples = result.cleaned_emg.shape[0]
+    n_channels = result.cleaned_emg.shape[1]
+    motion_diag = result.diagnostics.get("motion") or {}
+    motion_used = motion_diag.get("used") is not False
+
+    title_lines = [
+        f"source: {result.fname or '(unstamped)'}",
+        f"sr: {result.sr:.2f} Hz | n_samples: {n_samples} | "
+        f"n_channels: {n_channels}",
+        f"ECG stage: {'on' if ekg_used else 'off'} | "
+        f"motion stage: {'on' if motion_used else 'off'}",
+    ]
+    fig.suptitle("\n".join(title_lines), fontsize=10, y=0.985)
+
+    if not ekg_used:
+        ax = fig.add_axes([0.05, 0.05, 0.9, 0.85])
+        ax.axis("off")
+        ax.text(
+            0.5, 0.5, "ECG stage skipped",
+            transform=ax.transAxes, ha="center", va="center",
+            fontsize=14, color="0.4",
+        )
+        return
+
+    scores = ecg_diag.get("ic_ekg_corr_scores")
+    components_removed = list(ecg_diag.get("components_removed") or [])
+    manual = list(ecg_diag.get("manual_components_removed") or [])
+    auto = list(ecg_diag.get("auto_ekg_components_removed") or [])
+    best_lags = ecg_diag.get("ic_ekg_best_lags")
+
+    ax_bar = fig.add_axes([0.08, 0.42, 0.86, 0.45])
+    if scores is not None and len(scores) > 0:
+        scores_arr = np.asarray(scores)
+        x = np.arange(scores_arr.shape[0])
+        colors = [
+            "C3" if int(i) in components_removed else "0.6"
+            for i in x
+        ]
+        ax_bar.bar(x, np.abs(scores_arr), color=colors)
+        ax_bar.set_xlabel("IC index")
+        ax_bar.set_ylabel("|corr| vs EKG")
+        ax_bar.set_title("IC ↔ EKG lagged correlation scores")
+        ax_bar.set_xticks(x)
+        if cfg_threshold is not None:
+            ax_bar.axhline(
+                float(cfg_threshold), color="C0", lw=0.8, linestyle="--",
+                label=f"threshold={cfg_threshold:.2f}",
+            )
+            ax_bar.legend(loc="upper right", fontsize=8)
+    else:
+        ax_bar.text(
+            0.5, 0.5, "no IC scores (auto-detect off)",
+            transform=ax_bar.transAxes, ha="center", va="center", color="0.4",
+        )
+        ax_bar.set_xticks([])
+        ax_bar.set_yticks([])
+
+    ax_text = fig.add_axes([0.08, 0.06, 0.86, 0.30])
+    ax_text.axis("off")
+    lines = [
+        f"components_removed: {components_removed}",
+        f"auto_ekg_components_removed: {auto}",
+        f"manual_components_removed: {manual}",
+        f"ic_ekg_best_lags: {list(best_lags) if best_lags is not None else 'n/a'}",
+    ]
+    ax_text.text(
+        0.0, 1.0, "\n".join(lines),
+        transform=ax_text.transAxes, ha="left", va="top",
+        fontsize=9, family="monospace",
+    )
 
 
 def _write_report_pdf(
@@ -1164,7 +1331,14 @@ def _write_report_pdf(
 
     _, rows = _build_summary_rows(result)
 
+    threshold = (result.diagnostics.get("ecg") or {}).get("corr_threshold")
+
     with PdfPages(out_path) as pdf:
+        fig = plt.figure(figsize=(8.5, 11))
+        _draw_diagnostics_page(fig, result, cfg_threshold=threshold)
+        pdf.savefig(fig)
+        plt.close(fig)
+
         fig = plt.figure(figsize=(8.5, 11))
         _draw_summary_page(fig, result, rows)
         pdf.savefig(fig)
@@ -1175,13 +1349,14 @@ def _write_report_pdf(
             fig = plt.figure(figsize=(8.5, 11))
             gs = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.2], hspace=0.45)
             ax_e = fig.add_subplot(gs[0])
-            ax_m = fig.add_subplot(gs[1], sharex=ax_e)
-            ax_c = fig.add_subplot(gs[2], sharex=ax_e)
+            ax_m = fig.add_subplot(gs[1], sharex=ax_e, sharey=ax_e)
+            ax_c = fig.add_subplot(gs[2], sharex=ax_e, sharey=ax_e)
             ax_p = fig.add_subplot(gs[3])
             fig.suptitle(
                 f"{row['label']} | rank {row['rank']}/{len(rows)} | "
                 f"total {row['total_db']:+.2f} dB | "
                 f"ecg-band {row['ecg_db']:+.2f} dB | "
+                f"motion {row['motion_db']:+.2f} dB | "
                 f"motion: {row['motion']}",
                 fontsize=10,
             )
@@ -1231,7 +1406,7 @@ def _open_review_window(
         "show_cleaned": True,
     }
 
-    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True, sharey=True)
     # Stash the live state on the figure so tests (and curious power
     # users) can introspect the viewer without going through GUI events.
     fig._delsys_review_state = state  # type: ignore[attr-defined]
@@ -1302,6 +1477,145 @@ def _open_review_window(
     # ``plt.show()`` on Agg / PDF / SVG just emits a "non-GUI backend"
     # warning — gate on the interactive-backend list so headless
     # callers (and the test suite) stay quiet.
+    import matplotlib
+
+    if matplotlib.get_backend() in matplotlib.rcsetup.interactive_bk:
+        plt.show()
+
+
+def _component_tag(diagnostics: Dict[str, Any], component: int) -> str:
+    """Tag describing how a component was selected ("auto", "manual", ...)."""
+    ecg = diagnostics.get("ecg") or {}
+    auto = set(int(x) for x in (ecg.get("auto_ekg_components_removed") or []))
+    manual = set(int(x) for x in (ecg.get("manual_components_removed") or []))
+    in_auto = component in auto
+    in_manual = component in manual
+    if in_auto and in_manual:
+        return "auto+manual"
+    if in_auto:
+        return "auto"
+    if in_manual:
+        return "manual"
+    return "kept"
+
+
+def _open_components_review_window(
+    result: "CleaningResult", *, components: Optional[List[int]] = None
+) -> None:
+    """Stacked 4-panel viewer over the ICA components."""
+    if result.ica is None:
+        raise ValueError(
+            "review_components(): the ECG stage didn't run — no ICA result to review."
+        )
+
+    import matplotlib.pyplot as plt
+
+    ica = result.ica
+    sources = np.asarray(ica.sources)
+    mixing = np.asarray(ica.mixing)
+    n_components = sources.shape[1]
+
+    if components is None:
+        order = list(range(n_components))
+    else:
+        order = [int(c) for c in components]
+        for c in order:
+            if c < 0 or c >= n_components:
+                raise ValueError(
+                    f"component index {c} out of range (0..{n_components - 1})."
+                )
+    if not order:
+        raise ValueError("review_components(): no components to display.")
+
+    # The ICA was fit on column_stack([preprocessed_emg, ekg]); the
+    # cheapest faithful reconstruction is the inverse-transform of the
+    # full source matrix.
+    ica_input = ica.model.inverse_transform(sources)
+
+    feat_names = result.ica_input_feature_names or [
+        f"in{i}" for i in range(ica_input.shape[1])
+    ]
+    time = np.asarray(result.time)
+    if time.shape[0] != sources.shape[0]:
+        time = np.arange(sources.shape[0]) / float(result.sr)
+
+    state: Dict[str, Any] = {"idx": 0, "order": order}
+
+    fig = plt.figure(figsize=(10, 9))
+    gs = fig.add_gridspec(4, 1, hspace=0.35)
+    ax_ic = fig.add_subplot(gs[0])
+    ax_top1 = fig.add_subplot(gs[1], sharex=ax_ic)
+    ax_top2 = fig.add_subplot(gs[2], sharex=ax_ic)
+    ax_top3 = fig.add_subplot(gs[3], sharex=ax_ic)
+    contributor_axes = [ax_top1, ax_top2, ax_top3]
+    fig._delsys_components_state = state  # type: ignore[attr-defined]
+
+    def render() -> None:
+        c = order[state["idx"]]
+        for ax in (ax_ic, *contributor_axes):
+            ax.cla()
+        ax_ic.plot(time, sources[:, c], color="C3", lw=0.6)
+        ax_ic.set_ylabel(f"IC {c}")
+
+        col = mixing[:, c]
+        ranking = np.argsort(np.abs(col))[::-1]
+        for slot, ax in enumerate(contributor_axes):
+            if slot >= len(ranking):
+                ax.text(
+                    0.5, 0.5, "(no further contributor)",
+                    transform=ax.transAxes, ha="center", va="center", color="0.4",
+                )
+                continue
+            row = int(ranking[slot])
+            label = feat_names[row] if 0 <= row < len(feat_names) else f"in{row}"
+            weight = float(col[row])
+            ax.plot(time, ica_input[:, row], color="0.3", lw=0.6)
+            ax.set_ylabel(f"#{slot + 1}: {label}")
+            ax.set_title(
+                f"top contributor #{slot + 1}: {label}  (|A|={abs(weight):.3f})",
+                fontsize=8, loc="left",
+            )
+        ax_top3.set_xlabel("time (s)")
+
+        ecg_diag = result.diagnostics.get("ecg") or {}
+        scores = ecg_diag.get("ic_ekg_corr_scores")
+        lags = ecg_diag.get("ic_ekg_best_lags")
+        score_str = (
+            f"{float(np.asarray(scores)[c]):.2f}" if scores is not None else "n/a"
+        )
+        lag_str = (
+            f"{int(np.asarray(lags)[c]):+d}" if lags is not None else "n/a"
+        )
+        tag = _component_tag(result.diagnostics, c)
+        fig.suptitle(
+            f"IC {state['idx'] + 1}/{len(order)}: index={c}  "
+            f"| corr_score={score_str}  | lag={lag_str}  | tagged: {tag}",
+            fontsize=10,
+        )
+        fig.canvas.draw_idle()
+
+    def on_key(event) -> None:
+        k = getattr(event, "key", None)
+        if k in ("right", "n"):
+            state["idx"] = (state["idx"] + 1) % len(order)
+        elif k in ("left", "p"):
+            state["idx"] = (state["idx"] - 1) % len(order)
+        elif k == "home":
+            state["idx"] = 0
+        elif k == "end":
+            state["idx"] = len(order) - 1
+        elif k == "q":
+            plt.close(fig)
+            return
+        else:
+            return
+        render()
+
+    state["_cid"] = fig.canvas.mpl_connect("key_press_event", on_key)
+    state["_render"] = render
+    state["_on_key"] = on_key
+
+    render()
     import matplotlib
 
     if matplotlib.get_backend() in matplotlib.rcsetup.interactive_bk:

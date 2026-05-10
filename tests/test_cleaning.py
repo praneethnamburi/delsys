@@ -581,3 +581,176 @@ def test_review_channels_arg_restricts_order(fixtures_dir, tmp_path):
     state = plt.gcf()._delsys_review_state
     assert state["order"] == [3, 0, 1]
     plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# 0.4.x — diagnostics page, components viewer, splice_source
+# ---------------------------------------------------------------------------
+
+
+def test_result_carries_ica_when_ecg_stage_runs():
+    """``result.ica`` is populated with the ICA fit when the ECG stage ran."""
+    rng = np.random.default_rng(101)
+    sr = 200.0
+    n = int(sr * 4)
+    emg = rng.standard_normal((n, 2)) * 0.3
+    ekg = _simulate_ecg(n, sr, hr_bpm=70.0, seed=101)
+    contaminated = emg + np.outer(ekg, np.array([0.6, 0.8]))
+    cfg = CleaningConfig(use_motion_stage=False, preprocess_highpass_hz=None)
+    result = run_pipeline(contaminated, sr=sr, ekg_1d=ekg, config=cfg)
+
+    assert result.ica is not None
+    assert result.ica.sources.shape[0] == n
+    # ICA fits with n_signals = n_emg + 1 (EKG appended).
+    assert result.ica.sources.shape[1] == 3
+    assert result.ica.mixing.shape == (3, 3)
+    assert result.ica_input_feature_names is not None
+    assert result.ica_input_feature_names[-1] == "EKG"
+
+
+def test_result_ica_is_none_when_ecg_stage_skipped():
+    rng = np.random.default_rng(102)
+    sr = 200.0
+    n = int(sr * 2)
+    emg = rng.standard_normal((n, 2))
+    cfg = CleaningConfig(use_ecg_stage=False, use_motion_stage=False)
+    result = run_pipeline(emg, sr=sr, ekg_1d=None, config=cfg)
+    assert result.ica is None
+    assert result.ica_input_feature_names is None
+
+
+def test_summary_rows_include_motion_db(fixtures_dir, tmp_path):
+    """``_build_summary_rows`` returns a per-channel ``motion_db`` field
+    equal to ``_channel_motion_db(post_ecg, cleaned)``."""
+    from delsys.cleaning import _build_summary_rows, _channel_motion_db
+
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+    _, rows = _build_summary_rows(result)
+    assert all("motion_db" in r for r in rows)
+
+    post_ecg = np.asarray(result.stages["post_ecg"])
+    cleaned = np.asarray(result.cleaned_emg)
+    for r in rows:
+        ch = int(r["channel"])
+        expected = _channel_motion_db(post_ecg[:, ch], cleaned[:, ch])
+        assert abs(r["motion_db"] - expected) < 1e-9
+
+
+def test_pdf_page_count_includes_diagnostics_page(fixtures_dir, tmp_path):
+    """PDF has ``2 + n_emg_channels`` pages: diagnostics + summary +
+    one per channel."""
+    import re
+
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+    out = result.generate_report(path=tmp_path / "out.pdf")
+    n_emg = result.cleaned_emg.shape[1]
+    # Count ``/Type /Page`` objects that aren't ``/Pages`` (page-tree root).
+    blob = out.read_bytes()
+    n_pages = len(re.findall(rb"/Type\s*/Page[^s]", blob))
+    assert n_pages == 2 + n_emg, f"got {n_pages} pages; expected {2 + n_emg}"
+
+
+def test_review_components_constructs_and_keys_advance(fixtures_dir, tmp_path):
+    """``review_components()`` builds a 4-panel viewer and the key
+    handler advances the IC index."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+    assert result.ica is not None
+
+    plt.close("all")
+    result.review_components()
+    fig = plt.gcf()
+    state = fig._delsys_components_state
+    assert state["idx"] == 0
+    n = len(state["order"])
+    assert n == result.ica.sources.shape[1]
+
+    class _Ev:
+        pass
+
+    ev = _Ev()
+    ev.key = "right"
+    state["_on_key"](ev)
+    assert state["idx"] == 1
+    ev.key = "right"
+    state["_on_key"](ev)
+    assert state["idx"] == 2
+    ev.key = "left"
+    state["_on_key"](ev)
+    assert state["idx"] == 1
+    ev.key = "end"
+    state["_on_key"](ev)
+    assert state["idx"] == n - 1
+    ev.key = "home"
+    state["_on_key"](ev)
+    assert state["idx"] == 0
+    # Wrap on previous from 0.
+    ev.key = "left"
+    state["_on_key"](ev)
+    assert state["idx"] == n - 1
+    plt.close("all")
+
+
+def test_review_components_components_arg_restricts(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+    plt.close("all")
+    result.review_components(components=[2, 0])
+    state = plt.gcf()._delsys_components_state
+    assert state["order"] == [2, 0]
+    plt.close("all")
+
+
+def test_review_components_raises_when_ecg_skipped():
+    """``review_components`` raises when the ICA result is missing."""
+    rng = np.random.default_rng(103)
+    sr = 200.0
+    n = int(sr * 2)
+    emg = rng.standard_normal((n, 2))
+    cfg = CleaningConfig(use_ecg_stage=False, use_motion_stage=False)
+    result = run_pipeline(emg, sr=sr, ekg_1d=None, config=cfg)
+    with pytest.raises(ValueError):
+        result.review_components()
+
+
+def test_log_clean_splice_source_ekgonly(fixtures_dir, tmp_path):
+    """``splice_source='ekgonly'`` makes ``lf.emg`` match ``cleaned_emg_ekgonly``."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(splice_source="ekgonly", generate_report=False)
+    assert result.cleaned_emg_ekgonly is not None
+    np.testing.assert_allclose(lf.emg(), result.cleaned_emg_ekgonly)
+
+
+def test_log_clean_splice_source_motiononly(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(splice_source="motiononly", generate_report=False)
+    assert result.cleaned_emg_motiononly is not None
+    np.testing.assert_allclose(lf.emg(), result.cleaned_emg_motiononly)
+
+
+def test_log_clean_splice_source_combined_default(fixtures_dir, tmp_path):
+    """Default ``splice_source='combined'`` preserves today's behavior."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(generate_report=False)
+    np.testing.assert_allclose(lf.emg(), result.cleaned_emg)
+
+
+def test_log_clean_splice_source_motiononly_raises_when_skipped(fixtures_dir, tmp_path):
+    """Requesting motion-only when the motion stage didn't run raises."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    cfg = CleaningConfig(use_motion_stage=False)
+    with pytest.raises(ValueError):
+        lf.clean_emg_ekg_artifact(
+            config=cfg, motion=None, splice_source="motiononly", generate_report=False,
+        )
+
+
+def test_log_clean_splice_source_unknown_raises(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    with pytest.raises(ValueError):
+        lf.clean_emg_ekg_artifact(splice_source="bogus", generate_report=False)

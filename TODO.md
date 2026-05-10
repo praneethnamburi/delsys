@@ -63,12 +63,14 @@ To regenerate this snapshot::
 
 ## Shipped in 0.4.0 (2026-05-10)
 
-- ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report)` —
+- ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report, splice_source)` —
   end-to-end EMG/EKG artifact cleaner ported from
   `pn-projects/projects/emg_ica_cleaning.py`. By default mutates
   `lf.signals` in place, rebuilds the affected `Sensor.emg`
   bundles, and writes a multi-page PDF next to the source CSV;
   pass `in_place=False` / `generate_report=False` to opt out.
+  `splice_source="ekgonly"` / `"motiononly"` swap which variant
+  gets spliced back when a stage is doing more harm than good.
 - ✅ `delsys.cleaning` module — building blocks for power users
   (`fit_ica`, `score_components_against_ekg`,
   `auto_select_ekg_components`, `reconstruct_without_components`,
@@ -82,8 +84,24 @@ To regenerate this snapshot::
   PDF (ranked summary on page 1, per-channel pages thereafter).
 - ✅ `CleaningResult.review(channels=None)` — interactive matplotlib
   viewer with arrow-key channel cycling and `e` / `m` / `c` / `o`
-  overlay toggles.
-- ✅ `tutorials/cleaning_emg_ekg_artifact.md` — end-to-end walkthrough.
+  overlay toggles. Three time-domain panels share both x and y axes.
+- ✅ `CleaningResult.review_components(components=None)` — 4-panel
+  viewer over ICA components (IC time course + top three input
+  contributors ranked by `|A[i, c]|`). Pairs with the new
+  `result.ica` / `result.ica_input_feature_names` fields, populated
+  whenever the ECG stage runs.
+- ✅ PDF gains a new ECG diagnostics page first (bar plot of per-IC
+  correlation against the EKG reference + components-removed text);
+  summary table grows a `motion dB` column isolating the motion
+  stage's contribution; per-channel pages share y-axes across the
+  three time-domain panels.
+- ✅ `tutorials/cleaning_emg_ekg_artifact.md` — end-to-end walkthrough,
+  extended with `review_components` + `splice_source` sections and a
+  pointer to the bundled reference report.
+- ✅ `scripts/make_tutorial_sample.py` + committed
+  `tutorials/data/taichi_trial5_6s.csv` and matching reference
+  PDF — 6 s slice of a real TaiChi recording (every sensor kept), big
+  enough for ICA to converge cleanly.
 - ✅ Original symbol names re-exported as one-release-window aliases
   for source-compatibility with `pn-projects/projects/emg_ica_cleaning.py`.
 

@@ -23,6 +23,19 @@ assert lf.emg is not None, "no EMG channels — nothing to clean"
 assert lf.ekg is not None, "no EKG reference — ECG stage will be skipped"
 ```
 
+### Provenance of the bundled tutorial sample
+
+For a longer real recording, use the bundled tutorial sample:
+
+```python
+lf = delsys.Log("tutorials/data/taichi_trial5_6s.csv")
+```
+
+The committed sample is a 6-second slice of
+`S:/2210000787 - TaiChi/data/005/delsys/Trial_5.csv` — picked because
+it shows clean ICA-based ECG suppression on a real recording.
+Re-generate via `python scripts/make_tutorial_sample.py`.
+
 ## 2. Inspecting layout
 
 Per-EMG-channel labels live on the aggregate bundle's `signal_names`.
@@ -113,6 +126,35 @@ ranked = sorted(
 result.review(channels=ranked[:5])
 ```
 
+## 5b. Reviewing ICA components
+
+`result.review_components()` opens a 4-panel viewer showing one
+component at a time — the IC time course on top, then the three input
+signals it most contributes to (ranked by `|A[i, c]|`, the absolute
+mixing-matrix coefficient). Use this when the auto-detected component
+looks wrong: cycle through every IC, decide which to keep / drop, then
+re-run with a manual override via
+`CleaningConfig.ecg_components_to_remove`.
+
+Key bindings:
+
+| key             | action                              |
+|-----------------|-------------------------------------|
+| `→` / `n`       | next component (wrap)               |
+| `←` / `p`       | previous component (wrap)           |
+| `home` / `end`  | first / last component              |
+| `q`             | close                               |
+
+```python
+result.review_components()              # cycle through every IC
+result.review_components(components=[0, 4, 7])  # restrict to a subset
+```
+
+The viewer needs `result.ica` to be populated, which only happens when
+the ECG stage ran. `result.ica_input_feature_names` lists the EMG
+channel names with `"EKG"` appended — those are the labels rendered on
+the contributor panels.
+
 ## 6. Mutating in place
 
 The default `in_place=True` rewrites the EMG sample arrays inside
@@ -132,6 +174,29 @@ assert not np.array_equal(lf.emg(), raw_before)
 After the call, downstream EMG envelope / feature pipelines that read
 `lf.emg` see the cleaned signal — no separate `processed_emg` argument
 to thread through.
+
+### Picking which variant to splice back
+
+The default splices `result.cleaned_emg` (preprocess + ECG + motion)
+back into `lf.signals`. When the motion stage is too aggressive on a
+trial — the safety gates pass but the residual still over-cleans — you
+can splice the ECG-only variant instead:
+
+```python
+# Use the ECG-only cleaning, skip the motion regression.
+lf.clean_emg_ekg_artifact(splice_source="ekgonly")
+```
+
+Or, when the motion stage is doing the heavy lifting and the ECG
+suppression is shaving useful EMG off:
+
+```python
+lf.clean_emg_ekg_artifact(splice_source="motiononly")
+```
+
+`splice_source` is ignored when `in_place=False`. The auto-report runs
+*after* the splice-back, so the per-channel pages reflect what
+`lf.emg` will look like.
 
 ## 7. Power-user knobs
 
@@ -177,3 +242,20 @@ ica = fit_ica(np.column_stack([emg_2d, ekg_1d]))
 scores, lags = score_components_against_ekg(ica.sources, ekg_1d)
 print("IC scores against EKG:", scores)
 ```
+
+## 8. Reference report
+
+The PDF generated from the bundled tutorial sample lives at
+`tutorials/data/taichi_trial5_6s_cleaning_report.pdf` — open it
+alongside this walkthrough to see what each page looks like end-to-end:
+
+* **Page 1.** ECG diagnostics — bar plot of per-IC correlation against
+  the EKG reference (highlighted bars are the components that were
+  removed), plus the threshold line and a text block listing the
+  components removed.
+* **Page 2.** Summary table — one row per EMG channel, ranked by
+  total-power dB attenuation, with `total dB`, `ecg-band dB`,
+  `motion dB`, and the motion stage's per-channel outcome.
+* **Pages 3..N.** One per channel — three time-domain panels (raw vs
+  ekg-only, raw vs motion-only, raw vs cleaned) sharing both axes, plus
+  a PSD subplot.

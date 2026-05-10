@@ -18,12 +18,14 @@ into the package, with a clean splice-back into `lf.signals` /
 
 ### Added
 
-- `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report)` —
+- `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report, splice_source)` —
   end-to-end pipeline running on every EMG channel in the Log. By
   default mutates `lf.signals` in place, rebuilds the affected
   `Sensor.emg` bundles, and writes a multi-page PDF report next to
   the source CSV. Pass `in_place=False` to inspect diagnostics
   without mutating, or `generate_report=False` to skip the PDF step.
+  `splice_source` chooses which cleaned variant gets spliced back —
+  `"combined"` (default), `"ekgonly"`, or `"motiononly"`.
 - `delsys.cleaning` module — building blocks for users who want to
   drive the pipeline manually (`fit_ica`,
   `score_components_against_ekg`, `auto_select_ekg_components`,
@@ -46,10 +48,39 @@ into the package, with a clean splice-back into `lf.signals` /
 - `CleaningResult.review(channels=None)` — interactive matplotlib
   viewer with three stacked time-domain panels (raw vs ekg-only, raw
   vs motion-only, raw vs cleaned), arrow-key channel navigation, and
-  per-overlay toggles (`e` / `m` / `c` / `o`).
+  per-overlay toggles (`e` / `m` / `c` / `o`). The three panels share
+  both x and y axes so amplitude comparisons across stages line up
+  without zoom-juggling.
+- `CleaningResult.review_components(components=None)` — stacked
+  4-panel viewer over the ICA components: top panel is the IC time
+  course, the next three are the input signals it most contributes to
+  (ranked by `|A[i, c]|`). Arrow-key cycling, `home` / `end` jumps,
+  `q` to close. Use to decide whether to manually add or drop a
+  component from the auto-detected set.
+- `CleaningResult.ica` and `CleaningResult.ica_input_feature_names`
+  fields — full `ICAResult` (model, sources, mixing, feature names)
+  from the ECG stage plus the per-input-row labels (EMG names with
+  `"EKG"` appended). Both are `None` when the ECG stage didn't run.
+  Powers `review_components` and is exposed for power-user
+  introspection.
+- PDF report layout — page 1 is the new ECG diagnostics page (bar
+  plot of per-IC correlation against the EKG reference, threshold
+  line, and a text block listing the components removed); page 2 is
+  the ranked summary table, now with a numeric `channel` column, a
+  per-channel `location` label (from `lf.emg.signal_names`), and a
+  `motion dB` column isolating the motion stage's contribution;
+  pages 3..N are the per-channel pages (now with both x- and y-axis
+  sharing across the three time-domain panels). The cleaner shifts
+  the EMG baseline up front via `pysampled.Data.shift_baseline` so
+  the dB metrics are not biased by a constant DC offset.
 - `tutorials/cleaning_emg_ekg_artifact.md` — end-to-end walkthrough
   covering load → dry-run → PDF report → interactive review →
-  in-place mutation → power-user knobs.
+  in-place mutation → power-user knobs. Also covers
+  `review_components`, `splice_source`, and the new tutorial sample.
+- `scripts/make_tutorial_sample.py` and the bundled
+  `tutorials/data/taichi_trial5_6s.csv` (6 s, every sensor kept)
+  + matching reference report PDF — sample data the tutorial points
+  at, big enough for ICA to converge on a real recording.
 
 ### Internal
 

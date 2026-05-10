@@ -169,3 +169,171 @@ def test_signal_clone_preserves_metadata():
     assert s2.sensor is si
     assert s2.modality == "EMGS"
     assert s2.subchannel == "A"
+
+
+# ---------------------------------------------------------------------------
+# Sensor.__init__ — per-modality bundle labels (signal_names / signal_coords)
+# ---------------------------------------------------------------------------
+
+from delsys import EKG, EMG, Sensor  # noqa: E402  (kept near the helpers it serves)
+import pysampled  # noqa: E402
+
+
+def _build_sensor(modality, location, subchannels=None, n_samples=20, number=1, sensor_type=None):
+    """Construct a Sensor with synthetic Signals for one modality."""
+    from delsys._constants import SUBCHANNEL_MAP
+
+    subs = subchannels if subchannels is not None else SUBCHANNEL_MAP[modality]
+    si = SensorInfo(
+        name="testsensor",
+        modalities={modality},
+        number=number,
+        type_sensorlog=sensor_type,
+        lrc="L",
+        location=location,
+    )
+    sigs = []
+    for sub in subs:
+        s = Signal(
+            np.zeros(n_samples),
+            sr=200.0,
+            t0=0.0,
+            meta={"sensor": si, "modality": modality, "subchannel": sub},
+        )
+        sigs.append(s)
+    return Sensor(si, sigs)
+
+
+def test_sensor_acc_labels_use_trimmed_location():
+    sensor = _build_sensor("ACC", "LBicep")
+    assert sensor.acc.signal_names == ["LBicep"]
+    assert sensor.acc.signal_coords == ["x", "y", "z"]
+
+
+def test_sensor_gyro_labels_use_trimmed_location():
+    sensor = _build_sensor("GYRO", "RForearm")
+    assert sensor.gyro.signal_names == ["RForearm"]
+    assert sensor.gyro.signal_coords == ["x", "y", "z"]
+
+
+def test_sensor_acc_no_channelmap_falls_back_to_ch_number():
+    sensor = _build_sensor("ACC", None, number=7)
+    assert sensor.acc.signal_names == ["ch7"]
+    assert sensor.acc.signal_coords == ["x", "y", "z"]
+
+
+def test_sensor_acc_strips_parenthetical_in_location():
+    sensor = _build_sensor("ACC", "LPinkyReach (LPalmaris Longus)")
+    assert sensor.acc.signal_names == ["LPinkyReach"]
+
+
+def test_sensor_emgs_label():
+    sensor = _build_sensor("EMGS", "LBrachialis")
+    assert sensor.emg.signal_names == ["LBrachialis"]
+    assert sensor.emg.signal_coords == ["emg"]
+
+
+def test_sensor_emgd_two_channel_letter_fallback():
+    sensor = _build_sensor("EMGD", "LBicep")
+    assert sensor.emg.signal_names == ["LBicep_A", "LBicep_B"]
+    assert sensor.emg.signal_coords == ["emg"]
+
+
+def test_sensor_emgq_parsed_letters():
+    sensor = _build_sensor(
+        "EMGQ", "LForearmExtensors (A-Index, B-Middle, C-Ring, D-Little)"
+    )
+    assert sensor.emg.signal_names == [
+        "LForearmExtensors_Index",
+        "LForearmExtensors_Middle",
+        "LForearmExtensors_Ring",
+        "LForearmExtensors_Little",
+    ]
+    assert sensor.emg.signal_coords == ["emg"]
+
+
+def test_sensor_emgq_fallback_when_no_parenthetical():
+    sensor = _build_sensor("EMGQ", "LForearm")
+    assert sensor.emg.signal_names == [
+        "LForearm_A",
+        "LForearm_B",
+        "LForearm_C",
+        "LForearm_D",
+    ]
+
+
+def test_sensor_fsr_parsed_positions():
+    sensor = _build_sensor("FSR", "LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)")
+    assert sensor.fsr.signal_names == [
+        "LFoot_Heel",
+        "LFoot_OuterEdge",
+        "LFoot_Ball",
+        "LFoot_Toe",
+    ]
+    assert sensor.fsr.signal_coords == ["fsr"]
+
+
+def test_sensor_fsr_fallback_letters_when_unparsed():
+    sensor = _build_sensor("FSR", "LFoot")
+    assert sensor.fsr.signal_names == ["LFoot_A", "LFoot_B", "LFoot_C", "LFoot_D"]
+    assert sensor.fsr.signal_coords == ["fsr"]
+
+
+def test_sensor_ekg_labels():
+    sensor = _build_sensor("EKG", "Chest")
+    assert sensor.ekg.signal_names == ["Chest"]
+    assert sensor.ekg.signal_coords == ["ekg"]
+
+
+def test_sensor_analog_labels_and_carries_meta():
+    # Use a custom 1-channel Sensor; Analog SUBCHANNEL_MAP is ('A',).
+    sensor = _build_sensor("Analog", "Sync")
+    assert isinstance(sensor.analog, pysampled.Data)
+    assert sensor.analog.signal_names == ["Sync"]
+    assert sensor.analog.signal_coords == ["analog"]
+    # Plan calls out the pre-existing meta-loss bug — Analog should now carry
+    # the parent SensorInfo through `meta['sensor']`.
+    assert sensor.analog.meta is not None
+    assert sensor.analog.meta.get("sensor") is sensor.analog.meta["sensor"]
+    assert sensor.analog.meta["sensor"].location == "Sync"
+
+
+def test_sensor_vo2master_labels():
+    sensor = _build_sensor("VO2", None, number=900)
+    assert sensor.vo2master.signal_names == [
+        "resp_rate",
+        "tidal_vol",
+        "ventilation",
+        "feo2",
+        "vo2_absolute",
+        "ambient_pressure",
+        "flow_sensor",
+        "oxygen_sensor_humidity",
+    ]
+    assert sensor.vo2master.signal_coords == ["value"]
+
+
+def test_sensor_hrstrap_labels_and_carries_meta():
+    sensor = _build_sensor("HR", None, number=901)
+    assert sensor.hrstrap.signal_names == ["heart_rate"]
+    assert sensor.hrstrap.signal_coords == ["bpm"]
+    # HR also gains meta=sensor_meta in 0.1.1 (paired with Analog fix).
+    assert sensor.hrstrap.meta is not None
+    assert sensor.hrstrap.meta["sensor"].number == 901
+
+
+def test_sensor_emg_indexable_by_signal_name():
+    """Bundles with meaningful signal_names support pysampled label indexing."""
+    sensor = _build_sensor("EMGS", "LBrachialis")
+    emg = sensor.emg
+    # `emg["LBrachialis"]` is the user-facing label lookup pysampled 1.1.0+ provides.
+    sub = emg["LBrachialis"]
+    assert isinstance(sub, EMG)
+    assert sub().shape == emg().shape
+
+
+def test_sensor_acc_indexable_by_location():
+    sensor = _build_sensor("ACC", "LBicep")
+    acc = sensor.acc
+    sub = acc[acc.signal_names[0]]
+    assert sub().shape == acc().shape

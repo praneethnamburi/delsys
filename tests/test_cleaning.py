@@ -8,12 +8,17 @@ one fixture, since the cleaning algorithm is fixture-independent.
 
 import shutil
 
-import neurokit2 as nk
-import numpy as np
-import pytest
+import matplotlib
 
-from delsys import CleaningConfig, CleaningResult, Log
-from delsys.cleaning import (
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+import neurokit2 as nk  # noqa: E402
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+
+from delsys import CleaningConfig, CleaningResult, Log  # noqa: E402
+from delsys.cleaning import (  # noqa: E402
     auto_select_ekg_components,
     fit_ica,
     harmonize_multirate_inputs,
@@ -313,7 +318,7 @@ def test_log_clean_in_place_preserves_invariants(fixtures_dir, tmp_path):
     }
     raw_emg = lf.emg().copy()
 
-    result = lf.clean_emg_ekg_artifact()
+    result = lf.clean_emg_ekg_artifact(generate_report=False)
 
     assert isinstance(result, CleaningResult)
     assert len(lf.signals) == pre_n_signals
@@ -336,7 +341,7 @@ def test_log_clean_in_place_false_does_not_mutate(fixtures_dir, tmp_path):
 
     signals_id = id(lf.signals)
     raw_emg = lf.emg().copy()
-    result = lf.clean_emg_ekg_artifact(in_place=False)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
 
     assert id(lf.signals) == signals_id
     np.testing.assert_array_equal(lf.emg(), raw_emg)
@@ -351,7 +356,7 @@ def test_log_clean_motion_auto_pairs_per_sensor(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)
     assert lf.emg is not None and lf.ekg is not None
 
-    result = lf.clean_emg_ekg_artifact(in_place=False, motion="auto")
+    result = lf.clean_emg_ekg_artifact(in_place=False, motion="auto", generate_report=False)
 
     per_channel = result.diagnostics["motion"]["per_channel"]
     paired = [c for c in per_channel if c["used"]]
@@ -368,7 +373,7 @@ def test_log_clean_motion_none_skips_motion_stage(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)
     assert lf.emg is not None and lf.ekg is not None
 
-    result = lf.clean_emg_ekg_artifact(in_place=False, motion=None)
+    result = lf.clean_emg_ekg_artifact(in_place=False, motion=None, generate_report=False)
     assert result.diagnostics["motion"] == {"used": False}
 
 
@@ -382,7 +387,7 @@ def test_log_clean_motion_dict_explicit_pairing(fixtures_dir, tmp_path):
     # (Both exist in this fixture.)
     nums = {s.number for s in lf.sensors}
     assert {1, 2}.issubset(nums)
-    result = lf.clean_emg_ekg_artifact(in_place=False, motion={1: 2})
+    result = lf.clean_emg_ekg_artifact(in_place=False, motion={1: 2}, generate_report=False)
     per_channel = result.diagnostics["motion"]["per_channel"]
     # Sensor 1 EMGS is the first EMG channel in the aggregate; it should
     # be marked used.
@@ -394,7 +399,7 @@ def test_log_clean_motion_dict_explicit_pairing(fixtures_dir, tmp_path):
 def test_log_clean_motion_dict_unknown_sensor_raises(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)
     with pytest.raises(ValueError):
-        lf.clean_emg_ekg_artifact(in_place=False, motion={1: 99999})
+        lf.clean_emg_ekg_artifact(in_place=False, motion={1: 99999}, generate_report=False)
 
 
 def test_log_clean_no_emg_raises(fixtures_dir, tmp_path, monkeypatch):
@@ -404,7 +409,7 @@ def test_log_clean_no_emg_raises(fixtures_dir, tmp_path, monkeypatch):
     # exercise the validation branch deterministically.
     monkeypatch.setattr(type(lf), "emg", property(lambda self: None))
     with pytest.raises(ValueError):
-        lf.clean_emg_ekg_artifact(in_place=False)
+        lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
 
 
 def test_log_clean_manual_components_override(fixtures_dir, tmp_path):
@@ -417,6 +422,162 @@ def test_log_clean_manual_components_override(fixtures_dir, tmp_path):
         ecg_components_to_remove=[0],
         use_motion_stage=False,
     )
-    result = lf.clean_emg_ekg_artifact(in_place=False, config=cfg)
+    result = lf.clean_emg_ekg_artifact(in_place=False, config=cfg, generate_report=False)
     assert 0 in result.diagnostics["ecg"]["components_removed"]
     assert result.diagnostics["ecg"]["auto_ekg_components_removed"] == []
+
+
+# ---------------------------------------------------------------------------
+# Stage-isolated variants and reporting (0.4.x)
+# ---------------------------------------------------------------------------
+
+
+def test_run_pipeline_populates_ekgonly_and_motiononly():
+    """``run_pipeline`` exposes preprocess+ECG and preprocess+motion variants."""
+    rng = np.random.default_rng(11)
+    sr = 200.0
+    n = int(sr * 4)
+    emg = rng.standard_normal((n, 2)) * 0.3
+    ekg = _simulate_ecg(n, sr, hr_bpm=70.0, seed=11)
+    contaminated = emg + np.outer(ekg, np.array([0.6, 0.8]))
+    acc = rng.standard_normal((n, 3))
+    cfg = CleaningConfig(preprocess_highpass_hz=None)
+    result = run_pipeline(
+        contaminated, sr=sr, ekg_1d=ekg, acc_by_emg={0: acc, 1: acc}, config=cfg
+    )
+
+    # ekg-only equals the post-ECG snapshot in stages.
+    np.testing.assert_array_equal(result.cleaned_emg_ekgonly, result.stages["post_ecg"])
+    # motion-only is set when both stages would run.
+    assert result.cleaned_emg_motiononly is not None
+    # motion-only path differs from the combined path (the order
+    # changes the residual).
+    assert not np.allclose(result.cleaned_emg_motiononly, result.cleaned_emg)
+
+
+def test_run_pipeline_skipped_stages_yield_none_variants():
+    rng = np.random.default_rng(12)
+    sr = 200.0
+    n = int(sr * 2)
+    emg = rng.standard_normal((n, 2))
+
+    # No ekg -> ekgonly=None; no acc -> motiononly=None.
+    result = run_pipeline(emg, sr=sr, ekg_1d=None, acc_by_emg=None, config=CleaningConfig())
+    assert result.cleaned_emg_ekgonly is None
+    assert result.cleaned_emg_motiononly is None
+
+
+def test_generate_report_writes_pdf(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+    out = result.generate_report(path=tmp_path / "out.pdf")
+    assert out == tmp_path / "out.pdf"
+    assert out.exists()
+    assert out.stat().st_size > 0
+    with open(out, "rb") as f:
+        assert f.read(4) == b"%PDF"
+
+
+def test_generate_report_default_path_uses_fname(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+    assert result.fname is not None
+
+    out = result.generate_report()
+    expected = tmp_path / "discover170_cleaning_report.pdf"
+    assert out == expected
+    assert out.exists()
+
+
+def test_generate_report_raises_without_fname_or_path(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+    result.fname = None
+    with pytest.raises(ValueError):
+        result.generate_report()
+
+
+def test_log_clean_auto_report_default_writes_pdf(fixtures_dir, tmp_path):
+    """The default ``generate_report=True`` produces a sibling PDF."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    expected = tmp_path / "discover170_cleaning_report.pdf"
+    assert not expected.exists()
+    lf.clean_emg_ekg_artifact(in_place=False)
+    assert expected.exists()
+    assert expected.stat().st_size > 0
+
+
+def test_log_clean_auto_report_opt_out(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    expected = tmp_path / "discover170_cleaning_report.pdf"
+    lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+    assert not expected.exists()
+
+
+def test_review_constructs_and_keys_advance_channel(fixtures_dir, tmp_path):
+    """``review()`` builds a figure and the key handler advances the channel index."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+    plt.close("all")
+    result.review()
+    fig = plt.gcf()
+    state = fig._delsys_review_state
+    assert state["idx"] == 0
+    n = len(state["order"])
+    assert n == result.cleaned_emg.shape[1]
+
+    class _Ev:
+        pass
+
+    ev = _Ev()
+    ev.key = "right"
+    state["_on_key"](ev)
+    assert state["idx"] == 1
+    ev.key = "right"
+    state["_on_key"](ev)
+    assert state["idx"] == 2
+    ev.key = "left"
+    state["_on_key"](ev)
+    assert state["idx"] == 1
+    ev.key = "end"
+    state["_on_key"](ev)
+    assert state["idx"] == n - 1
+    ev.key = "home"
+    state["_on_key"](ev)
+    assert state["idx"] == 0
+    # Wrap on previous from 0.
+    ev.key = "left"
+    state["_on_key"](ev)
+    assert state["idx"] == n - 1
+
+    # Overlay toggles.
+    assert state["show_ekgonly"] is True
+    ev.key = "e"
+    state["_on_key"](ev)
+    assert state["show_ekgonly"] is False
+    # 'o' folds all-on / all-off: if any are on, turn them all off.
+    ev.key = "o"
+    state["_on_key"](ev)
+    assert state["show_ekgonly"] is False
+    assert state["show_motiononly"] is False
+    assert state["show_cleaned"] is False
+    # second 'o' flips them all back on.
+    ev.key = "o"
+    state["_on_key"](ev)
+    assert state["show_ekgonly"] is True
+    assert state["show_motiononly"] is True
+    assert state["show_cleaned"] is True
+    plt.close("all")
+
+
+def test_review_channels_arg_restricts_order(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+    plt.close("all")
+    result.review(channels=[3, 0, 1])
+    state = plt.gcf()._delsys_review_state
+    assert state["order"] == [3, 0, 1]
+    plt.close("all")

@@ -63,18 +63,27 @@ To regenerate this snapshot::
 
 ## Shipped in 0.4.0 (2026-05-10)
 
-- ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place)` —
+- ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report)` —
   end-to-end EMG/EKG artifact cleaner ported from
   `pn-projects/projects/emg_ica_cleaning.py`. By default mutates
-  `lf.signals` in place and rebuilds the affected `Sensor.emg`
-  bundles; pass `in_place=False` to inspect diagnostics without
-  mutating.
+  `lf.signals` in place, rebuilds the affected `Sensor.emg`
+  bundles, and writes a multi-page PDF next to the source CSV;
+  pass `in_place=False` / `generate_report=False` to opt out.
 - ✅ `delsys.cleaning` module — building blocks for power users
   (`fit_ica`, `score_components_against_ekg`,
   `auto_select_ekg_components`, `reconstruct_without_components`,
   `regress_out_ekg_from_emg`, `regress_out_motion_from_emg`,
   `harmonize_multirate_inputs`, `run_pipeline`) plus
   `CleaningConfig` / `CleaningResult` dataclasses.
+- ✅ `CleaningResult.cleaned_emg_ekgonly` / `cleaned_emg_motiononly`
+  stage-isolated variants, plus `feature_names` and `fname` so the
+  reporting helpers can label channels and default the output path.
+- ✅ `CleaningResult.generate_report(path=None)` — single multi-page
+  PDF (ranked summary on page 1, per-channel pages thereafter).
+- ✅ `CleaningResult.review(channels=None)` — interactive matplotlib
+  viewer with arrow-key channel cycling and `e` / `m` / `c` / `o`
+  overlay toggles.
+- ✅ `tutorials/cleaning_emg_ekg_artifact.md` — end-to-end walkthrough.
 - ✅ Original symbol names re-exported as one-release-window aliases
   for source-compatibility with `pn-projects/projects/emg_ica_cleaning.py`.
 

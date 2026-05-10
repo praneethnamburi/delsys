@@ -18,11 +18,12 @@ into the package, with a clean splice-back into `lf.signals` /
 
 ### Added
 
-- `Log.clean_emg_ekg_artifact(*, config, motion, in_place)` —
+- `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report)` —
   end-to-end pipeline running on every EMG channel in the Log. By
-  default mutates `lf.signals` in place and rebuilds the affected
-  `Sensor.emg` bundles; pass `in_place=False` to inspect the
-  diagnostics without mutating.
+  default mutates `lf.signals` in place, rebuilds the affected
+  `Sensor.emg` bundles, and writes a multi-page PDF report next to
+  the source CSV. Pass `in_place=False` to inspect diagnostics
+  without mutating, or `generate_report=False` to skip the PDF step.
 - `delsys.cleaning` module — building blocks for users who want to
   drive the pipeline manually (`fit_ica`,
   `score_components_against_ekg`, `auto_select_ekg_components`,
@@ -31,7 +32,24 @@ into the package, with a clean splice-back into `lf.signals` /
   `run_pipeline`).
 - `CleaningConfig` / `CleaningResult` dataclasses (re-exported from
   `delsys`) — the configuration and result containers for
-  `Log.clean_emg_ekg_artifact`.
+  `Log.clean_emg_ekg_artifact`. `CleaningResult` carries
+  `cleaned_emg_ekgonly` (preprocess+ECG only) and
+  `cleaned_emg_motiononly` (preprocess+motion only) variants
+  alongside the combined `cleaned_emg`, plus `feature_names` and
+  `fname` so the report and review helpers can label channels and
+  default the output path.
+- `CleaningResult.generate_report(path=None)` — writes a single
+  multi-page PDF (page 1: ranked summary table; subsequent pages:
+  one per EMG channel with raw vs each cleaning variant + PSD).
+  Defaults to `<source_csv_stem>_cleaning_report.pdf` next to the
+  input CSV when `result.fname` is stamped.
+- `CleaningResult.review(channels=None)` — interactive matplotlib
+  viewer with three stacked time-domain panels (raw vs ekg-only, raw
+  vs motion-only, raw vs cleaned), arrow-key channel navigation, and
+  per-overlay toggles (`e` / `m` / `c` / `o`).
+- `tutorials/cleaning_emg_ekg_artifact.md` — end-to-end walkthrough
+  covering load → dry-run → PDF report → interactive review →
+  in-place mutation → power-user knobs.
 
 ### Internal
 
@@ -44,10 +62,15 @@ into the package, with a clean splice-back into `lf.signals` /
 - Pipeline runs offline only in v1. The realtime / overlap-add
   variant from the source is intentionally not ported — restore if
   a real streaming use case appears.
-- No matplotlib helpers shipped. The source's
-  `plot_ica_components` / `plot_signals_before_after` belong in a
-  separate visualization module if/when a downstream caller needs
-  them.
+- `run_pipeline` runs one extra `regress_out_motion_from_emg` pass
+  on the preprocessed signal (skipping the ECG step) to populate
+  `cleaned_emg_motiononly`. Cheap compared to the ICA fit, which is
+  not duplicated.
+- Reporting / review helpers (`_rank_channels_by_attenuation`,
+  `_draw_channel_panels`, `_motion_outcome_for_channel`, etc.) live
+  in `src/delsys/cleaning.py` alongside the dataclass. Matplotlib /
+  scipy.signal.welch are imported lazily inside the helpers so
+  `run_pipeline`-only callers don't pay the import cost.
 - `delsys.cleaning` re-exports the original symbol names from
   `pn-projects/projects/emg_ica_cleaning.py`
   (`EMGPipelineConfig` → `CleaningConfig`,

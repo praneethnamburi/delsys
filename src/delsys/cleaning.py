@@ -26,7 +26,8 @@ case appears.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pysampled
@@ -148,6 +149,19 @@ class CleaningResult:
             :class:`Log.clean_emg_ekg_artifact`.
         coefficients: Fitted regression coefficients — keys
             ``'ecg_regression_beta'``, ``'motion_betas'``.
+        cleaned_emg_ekgonly: Same as ``cleaned_emg`` but with the motion
+            stage skipped (preprocess + ECG). ``None`` when the ECG
+            stage didn't run.
+        cleaned_emg_motiononly: Same as ``cleaned_emg`` but with the ECG
+            stage skipped (preprocess + motion). ``None`` when the
+            motion stage didn't run.
+        feature_names: Per-EMG-channel labels (length
+            ``n_emg_channels``). Used by :meth:`generate_report` and
+            :meth:`review` to title each channel.
+        fname: Source CSV path. Stamped by
+            :class:`Log.clean_emg_ekg_artifact` so that
+            :meth:`generate_report` can default to a sibling of the
+            input file.
     """
 
     cleaned_emg: np.ndarray
@@ -156,6 +170,44 @@ class CleaningResult:
     stages: Dict[str, np.ndarray] = field(default_factory=dict)
     diagnostics: Dict[str, Any] = field(default_factory=dict)
     coefficients: Dict[str, Any] = field(default_factory=dict)
+    cleaned_emg_ekgonly: Optional[np.ndarray] = None
+    cleaned_emg_motiononly: Optional[np.ndarray] = None
+    feature_names: Optional[List[str]] = None
+    fname: Optional[str] = None
+
+    def generate_report(self, path: Optional[Union[str, Path]] = None) -> Path:
+        """Write a multi-page PDF report summarizing the cleaning result.
+
+        Page 1 is a ranked summary table (one row per EMG channel,
+        sorted most-attenuated first). Subsequent pages plot raw vs
+        each cleaning variant for one channel apiece, in the same
+        ranked order.
+
+        Args:
+            path: Output PDF path. When ``None``, defaults to
+                ``<dir(self.fname)>/<stem(self.fname)>_cleaning_report.pdf``;
+                raises :class:`ValueError` if ``self.fname`` is also
+                unset.
+
+        Returns:
+            The :class:`pathlib.Path` of the file that was written.
+        """
+        return _write_report_pdf(self, path)
+
+    def review(self, *, channels: Optional[List[int]] = None) -> None:
+        """Open an interactive matplotlib viewer over the cleaned channels.
+
+        Three stacked time-domain panels per channel — raw vs
+        ekg-only, raw vs motion-only, raw vs combined-cleaned — with
+        arrow-key navigation and overlay toggles. See module docstring
+        / tutorial for the full key map.
+
+        Args:
+            channels: Optional list of EMG column indices to cycle
+                through. When ``None`` (default), every channel is
+                shown in ranked-by-attenuation order.
+        """
+        _open_review_window(self, channels=channels)
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +861,7 @@ def run_pipeline(
     stages["preprocessed"] = pre
 
     post_ecg = pre
+    ecg_ran = False
     if cfg.use_ecg_stage and ekg_1d is not None:
         ecg_stage = _run_ecg_stage(pre, np.asarray(ekg_1d), cfg, feature_names)
         post_ecg = ecg_stage["cleaned_emg"]
@@ -820,11 +873,13 @@ def run_pipeline(
             "ic_ekg_corr_scores": ecg_stage["ic_ekg_corr_scores"],
             "ic_ekg_best_lags": ecg_stage["ic_ekg_best_lags"],
         }
+        ecg_ran = True
     else:
         diagnostics["ecg"] = {"used": False}
     stages["post_ecg"] = post_ecg
 
     post_motion = post_ecg
+    motion_ran = False
     if cfg.use_motion_stage and acc_by_emg:
         post_motion, motion_betas, motion_diag = regress_out_motion_from_emg(
             post_ecg,
@@ -838,9 +893,28 @@ def run_pipeline(
         )
         coefficients["motion_betas"] = motion_betas
         diagnostics["motion"] = motion_diag
+        motion_ran = True
     else:
         diagnostics["motion"] = {"used": False}
     stages["cleaned"] = post_motion
+
+    # Stage-isolated variants. ekg-only is a free read; motion-only
+    # requires a second motion-regression pass on the preprocessed
+    # signal (skips the ECG step) — cheap compared to ICA.
+    cleaned_emg_ekgonly = stages["post_ecg"] if ecg_ran else None
+    cleaned_emg_motiononly: Optional[np.ndarray] = None
+    if motion_ran:
+        motiononly, _, _ = regress_out_motion_from_emg(
+            stages["preprocessed"],
+            acc_by_emg=acc_by_emg,
+            max_lag_samples=cfg.motion_max_lag_samples,
+            ridge_alpha=cfg.motion_ridge_alpha,
+            include_magnitude=cfg.motion_include_magnitude,
+            include_derivative=cfg.motion_include_derivative,
+            min_variance_ratio=cfg.min_variance_ratio,
+            min_power_ratio=cfg.min_power_ratio,
+        )
+        cleaned_emg_motiononly = motiononly
 
     if time is None:
         out_time = np.arange(stages["cleaned"].shape[0]) / float(sr)
@@ -859,7 +933,379 @@ def run_pipeline(
         stages=stages,
         diagnostics=diagnostics,
         coefficients=coefficients,
+        cleaned_emg_ekgonly=cleaned_emg_ekgonly,
+        cleaned_emg_motiononly=cleaned_emg_motiononly,
+        feature_names=list(feature_names) if feature_names is not None else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Reporting and review helpers
+# ---------------------------------------------------------------------------
+#
+# Matplotlib is imported lazily inside these helpers so that callers that
+# only use ``run_pipeline`` don't pay the matplotlib import cost.
+
+
+# Frequency band used by the report's "ecg-band dB" column. Wide enough
+# to capture the QRS spike and its first few harmonics, narrow enough
+# that the EMG band (typically 30–500 Hz) doesn't dominate the integral.
+_ECG_BAND_LO_HZ = 0.5
+_ECG_BAND_HI_HZ = 30.0
+
+
+def _rank_channels_by_attenuation(raw: np.ndarray, cleaned: np.ndarray) -> List[int]:
+    """Return EMG column indices sorted by total-power dB attenuation.
+
+    Most-attenuated (most-negative dB) first. Used to order the report's
+    summary table and the per-channel pages.
+    """
+    var_raw = np.var(np.asarray(raw), axis=0)
+    var_cleaned = np.var(np.asarray(cleaned), axis=0)
+    db = 10.0 * np.log10(np.maximum(var_cleaned, 1e-30) / np.maximum(var_raw, 1e-30))
+    return [int(i) for i in np.argsort(db)]
+
+
+def _motion_outcome_for_channel(diagnostics: Dict[str, Any], ch_idx: int) -> str:
+    """Look up the per-channel motion-stage reason from a result's diagnostics."""
+    motion = diagnostics.get("motion") or {}
+    if not motion or motion.get("used") is False:
+        return "n/a"
+    per_channel = motion.get("per_channel") or []
+    for c in per_channel:
+        if int(c.get("channel", -1)) == int(ch_idx):
+            return str(c.get("reason", "n/a"))
+    return "n/a"
+
+
+def _channel_label(result: "CleaningResult", ch_idx: int) -> str:
+    if result.feature_names and 0 <= ch_idx < len(result.feature_names):
+        return str(result.feature_names[ch_idx])
+    return f"ch{ch_idx}"
+
+
+def _channel_total_db(raw_col: np.ndarray, cleaned_col: np.ndarray) -> float:
+    return 10.0 * np.log10(
+        max(float(np.var(cleaned_col)), 1e-30) / max(float(np.var(raw_col)), 1e-30)
+    )
+
+
+def _welch_nperseg(n_samples: int, sr: float) -> int:
+    """Pick a sane Welch ``nperseg`` for short EMG segments."""
+    target = int(sr * 2)
+    nperseg = min(target, n_samples)
+    nperseg = max(nperseg, min(64, n_samples))
+    return max(int(nperseg), 8)
+
+
+def _band_power(sig_1d: np.ndarray, sr: float, lo: float, hi: float) -> float:
+    """Integrated PSD between ``[lo, hi]`` Hz via Welch."""
+    from scipy.signal import welch
+
+    sig = np.asarray(sig_1d).reshape(-1)
+    nperseg = _welch_nperseg(sig.shape[0], sr)
+    f, p = welch(sig, fs=float(sr), nperseg=nperseg)
+    band = (f >= float(lo)) & (f <= float(hi))
+    if not np.any(band):
+        return 0.0
+    integrate = getattr(np, "trapezoid", np.trapz)
+    return float(integrate(p[band], f[band]))
+
+
+def _channel_ecg_band_db(raw_col: np.ndarray, cleaned_col: np.ndarray, sr: float) -> float:
+    p_raw = _band_power(raw_col, sr, _ECG_BAND_LO_HZ, _ECG_BAND_HI_HZ)
+    p_cleaned = _band_power(cleaned_col, sr, _ECG_BAND_LO_HZ, _ECG_BAND_HI_HZ)
+    return 10.0 * np.log10(max(p_cleaned, 1e-30) / max(p_raw, 1e-30))
+
+
+def _resolve_default_report_path(result: "CleaningResult") -> Path:
+    if result.fname is None:
+        raise ValueError(
+            "generate_report() needs an explicit path= when result.fname is unset."
+        )
+    src = Path(result.fname)
+    return src.parent / f"{src.stem}_cleaning_report.pdf"
+
+
+def _build_summary_rows(result: "CleaningResult") -> Tuple[List[int], List[Dict[str, Any]]]:
+    raw = np.asarray(result.stages["raw"])
+    cleaned = np.asarray(result.cleaned_emg)
+    sr = float(result.sr)
+
+    ranked = _rank_channels_by_attenuation(raw, cleaned)
+    rows: List[Dict[str, Any]] = []
+    for rank, ch in enumerate(ranked):
+        rows.append(
+            {
+                "rank": rank + 1,
+                "channel": ch,
+                "label": _channel_label(result, ch),
+                "total_db": _channel_total_db(raw[:, ch], cleaned[:, ch]),
+                "ecg_db": _channel_ecg_band_db(raw[:, ch], cleaned[:, ch], sr),
+                "motion": _motion_outcome_for_channel(result.diagnostics, ch),
+            }
+        )
+    return ranked, rows
+
+
+def _draw_channel_panels(
+    axes,
+    raw_col: np.ndarray,
+    ekgonly_col: Optional[np.ndarray],
+    motiononly_col: Optional[np.ndarray],
+    cleaned_col: np.ndarray,
+    time: np.ndarray,
+    *,
+    show_ekgonly: bool = True,
+    show_motiononly: bool = True,
+    show_cleaned: bool = True,
+) -> None:
+    """Populate the three time-domain panels used by review() and per-channel pages."""
+    ax_e, ax_m, ax_c = axes
+    for ax in axes:
+        ax.cla()
+
+    ax_e.plot(time, raw_col, color="0.5", lw=0.6, label="raw")
+    if ekgonly_col is None:
+        ax_e.text(
+            0.5, 0.5, "ECG stage skipped",
+            transform=ax_e.transAxes, ha="center", va="center", color="0.4",
+        )
+    elif show_ekgonly:
+        ax_e.plot(time, ekgonly_col, color="C0", lw=0.6, label="ekg-only")
+    ax_e.set_ylabel("ekg-only")
+    ax_e.legend(loc="upper right", fontsize=7)
+
+    ax_m.plot(time, raw_col, color="0.5", lw=0.6, label="raw")
+    if motiononly_col is None:
+        ax_m.text(
+            0.5, 0.5, "motion stage skipped",
+            transform=ax_m.transAxes, ha="center", va="center", color="0.4",
+        )
+    elif show_motiononly:
+        ax_m.plot(time, motiononly_col, color="C1", lw=0.6, label="motion-only")
+    ax_m.set_ylabel("motion-only")
+    ax_m.legend(loc="upper right", fontsize=7)
+
+    ax_c.plot(time, raw_col, color="0.5", lw=0.6, label="raw")
+    if show_cleaned:
+        ax_c.plot(time, cleaned_col, color="C2", lw=0.6, label="cleaned")
+    ax_c.set_ylabel("cleaned")
+    ax_c.set_xlabel("time (s)")
+    ax_c.legend(loc="upper right", fontsize=7)
+
+
+def _draw_psd(ax, raw_col: np.ndarray, cleaned_col: np.ndarray, sr: float) -> None:
+    from scipy.signal import welch
+
+    nperseg = _welch_nperseg(raw_col.shape[0], sr)
+    f_r, p_r = welch(raw_col, fs=float(sr), nperseg=nperseg)
+    f_c, p_c = welch(cleaned_col, fs=float(sr), nperseg=nperseg)
+    ax.semilogy(f_r, np.maximum(p_r, 1e-30), color="0.5", lw=0.6, label="raw")
+    ax.semilogy(f_c, np.maximum(p_c, 1e-30), color="C2", lw=0.6, label="cleaned")
+    ax.set_xlabel("freq (Hz)")
+    ax.set_ylabel("PSD")
+    ax.legend(loc="upper right", fontsize=7)
+
+
+def _draw_summary_page(fig, result: "CleaningResult", rows: List[Dict[str, Any]]) -> None:
+    fig.clf()
+    components_removed = (
+        result.diagnostics.get("ecg", {}).get("components_removed", "n/a")
+    )
+    title_lines = [
+        f"source: {result.fname or '(unstamped)'}",
+        f"sr: {result.sr:.2f} Hz | n_samples: {result.cleaned_emg.shape[0]} | "
+        f"n_channels: {result.cleaned_emg.shape[1]}",
+        f"ECG components removed: {components_removed}",
+    ]
+    fig.suptitle("\n".join(title_lines), fontsize=10, y=0.985)
+    ax = fig.add_axes([0.05, 0.03, 0.9, 0.86])
+    ax.axis("off")
+    cell_text = [
+        [
+            str(r["rank"]),
+            r["label"],
+            f"{r['total_db']:+.2f}",
+            f"{r['ecg_db']:+.2f}",
+            r["motion"],
+        ]
+        for r in rows
+    ]
+    table = ax.table(
+        cellText=cell_text,
+        colLabels=["rank", "channel", "total dB", "ecg-band dB", "motion"],
+        loc="upper center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1.0, 1.1)
+
+
+def _write_report_pdf(
+    result: "CleaningResult", path: Optional[Union[str, Path]]
+) -> Path:
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    if path is None:
+        out_path = _resolve_default_report_path(result)
+    else:
+        out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    raw = np.asarray(result.stages["raw"])
+    cleaned = np.asarray(result.cleaned_emg)
+    ekgonly = result.cleaned_emg_ekgonly
+    motiononly = result.cleaned_emg_motiononly
+    time = np.asarray(result.time)
+    sr = float(result.sr)
+
+    _, rows = _build_summary_rows(result)
+
+    with PdfPages(out_path) as pdf:
+        fig = plt.figure(figsize=(8.5, 11))
+        _draw_summary_page(fig, result, rows)
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        for row in rows:
+            ch = int(row["channel"])
+            fig = plt.figure(figsize=(8.5, 11))
+            gs = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.2], hspace=0.45)
+            ax_e = fig.add_subplot(gs[0])
+            ax_m = fig.add_subplot(gs[1], sharex=ax_e)
+            ax_c = fig.add_subplot(gs[2], sharex=ax_e)
+            ax_p = fig.add_subplot(gs[3])
+            fig.suptitle(
+                f"{row['label']} | rank {row['rank']}/{len(rows)} | "
+                f"total {row['total_db']:+.2f} dB | "
+                f"ecg-band {row['ecg_db']:+.2f} dB | "
+                f"motion: {row['motion']}",
+                fontsize=10,
+            )
+            _draw_channel_panels(
+                (ax_e, ax_m, ax_c),
+                raw[:, ch],
+                ekgonly[:, ch] if ekgonly is not None else None,
+                motiononly[:, ch] if motiononly is not None else None,
+                cleaned[:, ch],
+                time,
+            )
+            _draw_psd(ax_p, raw[:, ch], cleaned[:, ch], sr)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+    return out_path
+
+
+def _open_review_window(
+    result: "CleaningResult", *, channels: Optional[List[int]] = None
+) -> None:
+    import matplotlib.pyplot as plt
+
+    raw = np.asarray(result.stages["raw"])
+    cleaned = np.asarray(result.cleaned_emg)
+    ekgonly = result.cleaned_emg_ekgonly
+    motiononly = result.cleaned_emg_motiononly
+    time = np.asarray(result.time)
+    n_ch = cleaned.shape[1]
+
+    ranked = _rank_channels_by_attenuation(raw, cleaned)
+    if channels is None:
+        order = list(ranked)
+    else:
+        order = [int(c) for c in channels]
+        for c in order:
+            if c < 0 or c >= n_ch:
+                raise ValueError(
+                    f"channel index {c} out of range (0..{n_ch - 1})."
+                )
+
+    state: Dict[str, Any] = {
+        "idx": 0,
+        "order": order,
+        "show_ekgonly": True,
+        "show_motiononly": True,
+        "show_cleaned": True,
+    }
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    # Stash the live state on the figure so tests (and curious power
+    # users) can introspect the viewer without going through GUI events.
+    fig._delsys_review_state = state  # type: ignore[attr-defined]
+
+    def render() -> None:
+        ch = order[state["idx"]]
+        rank_in_full = ranked.index(ch) + 1 if ch in ranked else -1
+        total_db = _channel_total_db(raw[:, ch], cleaned[:, ch])
+        motion = _motion_outcome_for_channel(result.diagnostics, ch)
+        label = _channel_label(result, ch)
+        _draw_channel_panels(
+            axes,
+            raw[:, ch],
+            ekgonly[:, ch] if ekgonly is not None else None,
+            motiononly[:, ch] if motiononly is not None else None,
+            cleaned[:, ch],
+            time,
+            show_ekgonly=state["show_ekgonly"],
+            show_motiononly=state["show_motiononly"],
+            show_cleaned=state["show_cleaned"],
+        )
+        fig.suptitle(
+            f"ch {state['idx'] + 1}/{len(order)}: {label}  "
+            f"| rank {rank_in_full}/{len(ranked)}  "
+            f"| total {total_db:+.2f} dB  | motion: {motion}",
+            fontsize=10,
+        )
+        fig.canvas.draw_idle()
+
+    def on_key(event) -> None:
+        k = getattr(event, "key", None)
+        if k in ("right", "n"):
+            state["idx"] = (state["idx"] + 1) % len(order)
+        elif k in ("left", "p"):
+            state["idx"] = (state["idx"] - 1) % len(order)
+        elif k == "home":
+            state["idx"] = 0
+        elif k == "end":
+            state["idx"] = len(order) - 1
+        elif k == "e":
+            state["show_ekgonly"] = not state["show_ekgonly"]
+        elif k == "m":
+            state["show_motiononly"] = not state["show_motiononly"]
+        elif k == "c":
+            state["show_cleaned"] = not state["show_cleaned"]
+        elif k == "o":
+            any_on = (
+                state["show_ekgonly"]
+                or state["show_motiononly"]
+                or state["show_cleaned"]
+            )
+            new_val = not any_on
+            state["show_ekgonly"] = new_val
+            state["show_motiononly"] = new_val
+            state["show_cleaned"] = new_val
+        elif k == "q":
+            plt.close(fig)
+            return
+        else:
+            return
+        render()
+
+    state["_cid"] = fig.canvas.mpl_connect("key_press_event", on_key)
+    state["_render"] = render
+    state["_on_key"] = on_key
+
+    render()
+    # ``plt.show()`` on Agg / PDF / SVG just emits a "non-GUI backend"
+    # warning — gate on the interactive-backend list so headless
+    # callers (and the test suite) stay quiet.
+    import matplotlib
+
+    if matplotlib.get_backend() in matplotlib.rcsetup.interactive_bk:
+        plt.show()
 
 
 # ---------------------------------------------------------------------------

@@ -538,6 +538,7 @@ class Log:
         config: Optional[CleaningConfig] = None,
         motion: Optional[Union[str, Dict[int, Union[int, str]]]] = "auto",
         in_place: bool = True,
+        generate_report: bool = True,
     ) -> CleaningResult:
         """Clean ECG and motion artifact from every EMG channel in this Log.
 
@@ -578,6 +579,13 @@ class Log:
                 :class:`CleaningResult` is for diagnostics. If ``False``,
                 do not mutate; just return the result so the caller can
                 splice manually.
+            generate_report: If ``True`` (default), write a multi-page
+                PDF report to ``<source_csv_stem>_cleaning_report.pdf``
+                next to the input CSV after the run completes (and
+                after the in-place splice-back, when applicable).
+                Equivalent to calling
+                :meth:`CleaningResult.generate_report` on the returned
+                result. Pass ``False`` to skip the PDF step.
 
         Returns:
             :class:`CleaningResult` containing the cleaned EMG matrix,
@@ -693,9 +701,14 @@ class Log:
             "n_acc_streams": len(harmonized["acc_by_emg"]),
             "backend": "pysampled",
         }
+        result.fname = self.fname
+        result.feature_names = list(feature_names)
 
         if in_place:
             self._splice_emg_back(result.cleaned_emg, emg_layout)
+
+        if generate_report:
+            result.generate_report()
 
         return result
 

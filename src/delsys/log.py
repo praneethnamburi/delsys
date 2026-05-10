@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Un
 import numpy as np
 import pandas as pd
 
-from delsys._constants import TARGET_SR
+from delsys._constants import SUBCHANNEL_MAP, TARGET_SR
 from delsys._metadata import SensorInfo, SensorLog
 from delsys._parse import (
     _detect_parser,
@@ -30,6 +30,12 @@ from delsys._util import (
     _mod_to_attr,
     _modset_to_strlist,
     _normalize_signal_lengths,
+)
+from delsys.cleaning import (
+    CleaningConfig,
+    CleaningResult,
+    harmonize_multirate_inputs,
+    run_pipeline,
 )
 from delsys.ekg import EKG
 from delsys.emg import EMG
@@ -521,6 +527,273 @@ class Log:
             return signals
 
         raise ValueError(f"Unknown as_={as_!r}; expected 'auto', 'modality', 'sensor', or 'signal'")
+
+    # ------------------------------------------------------------------
+    # EMG / EKG artifact cleaning
+    # ------------------------------------------------------------------
+
+    def clean_emg_ekg_artifact(
+        self,
+        *,
+        config: Optional[CleaningConfig] = None,
+        motion: Optional[Union[str, Dict[int, Union[int, str]]]] = "auto",
+        in_place: bool = True,
+    ) -> CleaningResult:
+        """Clean ECG and motion artifact from every EMG channel in this Log.
+
+        Stages:
+
+        1. **Gather** — :attr:`emg` + :attr:`ekg` + (optional) per-EMG ACC
+           predictors resolved from ``motion``.
+        2. **Harmonize** — defensively resample EMG / EKG / ACC to the
+           EMG bundle's sampling rate. EMG passes through unchanged; the
+           rest are tail-trimmed to a common length.
+        3. **Pipeline** — preprocess → ICA-based ECG suppression with
+           auto component detection by lagged correlation → optional
+           ACC-guided motion regression with safety gates. See
+           :func:`delsys.cleaning.run_pipeline`.
+        4. **Splice-back** — when ``in_place=True`` (default), replace
+           the EMG samples in :attr:`signals` and rebuild every sensor
+           that carries EMG so :attr:`emg` and :attr:`sensors[*].emg`
+           reflect the cleaned data on next access.
+
+        Args:
+            config: Pipeline knobs. Defaults to :class:`CleaningConfig`'s
+                defaults.
+            motion: ACC predictor source.
+
+                * ``"auto"`` (default) — pair each EMG sensor with its
+                  own ACC bundle when present (Trigno Avanti sensors
+                  carry both modalities). EMG sensors with no ACC pair
+                  pass through the ECG stage only.
+                * ``dict`` of ``{emg_sensor_number: target}`` — explicit
+                  mapping. ``target`` is either an integer sensor number
+                  whose ACC bundle to use, or a string matched against
+                  :attr:`Sensor.location`.
+                * ``None`` — skip the motion stage regardless of
+                  ``config.use_motion_stage``.
+
+            in_place: If ``True`` (default), mutate :attr:`signals` and
+                rebuild every EMG sensor; the returned
+                :class:`CleaningResult` is for diagnostics. If ``False``,
+                do not mutate; just return the result so the caller can
+                splice manually.
+
+        Returns:
+            :class:`CleaningResult` containing the cleaned EMG matrix,
+            per-stage snapshots, and diagnostics.
+
+        Raises:
+            ValueError: If the Log has no EMG bundle, or if a
+                ``motion`` dict references a sensor number that does
+                not exist or has no ACC modality.
+
+        Example:
+            .. code-block:: python
+
+                import delsys
+                from delsys import CleaningConfig
+
+                lf = delsys.Log("trial.csv")
+
+                # Default: auto ECG component removal, auto ACC pairing
+                result = lf.clean_emg_ekg_artifact()
+
+                # Manual ECG component override
+                cfg = CleaningConfig(
+                    ecg_auto_remove_components=False,
+                    ecg_components_to_remove=[2, 5],
+                )
+                result = lf.clean_emg_ekg_artifact(config=cfg)
+
+                # Drive motion with explicit ACC pairing
+                result = lf.clean_emg_ekg_artifact(motion={4: 4, 14: 11})
+
+                # Dry-run, do not mutate
+                result = lf.clean_emg_ekg_artifact(in_place=False)
+        """
+        if config is None:
+            config = CleaningConfig()
+        if self.emg is None:
+            raise ValueError("Log has no EMG bundle to clean.")
+
+        emg_bundle = self.emg
+        emg_sr = float(emg_bundle.sr)
+        emg_2d = np.asarray(emg_bundle())
+
+        # Per-sensor channel layout in the aggregate EMG matrix: each EMG
+        # sensor contributes ``len(SUBCHANNEL_MAP[mod])`` columns in
+        # ``Log.sensors`` order (matching ``_aggregate_bundles`` /
+        # ``Sensor.__init__``). Cache this so the splice-back, the
+        # feature_names list, and the acc_by_emg map all index by the
+        # same column ordering.
+        emg_layout: List[Tuple[Any, str]] = []  # (sensor, modality) per EMG sensor
+        feature_names: List[str] = []
+        for sensor in self.sensors:
+            mod = next(
+                (m for m in sensor.modalities if m.startswith("EMG")), None
+            )
+            if mod is None:
+                continue
+            emg_layout.append((sensor, mod))
+            feature_names.extend(sensor.emg.signal_names)
+
+        # EKG reference: collapse to 1-D. Multi-EKG logs use the first
+        # column — a deliberate simplification; users wanting to mix
+        # multiple EKG references can pre-process and pass the result
+        # through delsys.cleaning.run_pipeline directly.
+        ekg_1d: Optional[np.ndarray] = None
+        ekg_sr: Optional[float] = None
+        if self.ekg is not None:
+            ekg_arr = np.asarray(self.ekg())
+            ekg_1d = ekg_arr if ekg_arr.ndim == 1 else ekg_arr[:, 0]
+            ekg_sr = float(self.ekg.sr)
+
+        # Resolve the per-EMG-sensor ACC predictor according to ``motion``.
+        # Build acc_by_emg keyed by *EMG column index* in ``emg_2d``;
+        # all sub-channels of one EMG sensor share the same predictor.
+        acc_by_emg: Dict[int, np.ndarray] = {}
+        acc_sr: Dict[int, float] = {}
+        if motion is not None:
+            col_idx = 0
+            for sensor, mod in emg_layout:
+                n_subch = len(SUBCHANNEL_MAP[mod])
+                acc_sensor = self._resolve_acc_for_emg(sensor, motion)
+                if acc_sensor is not None and hasattr(acc_sensor, "acc"):
+                    acc_arr = np.asarray(acc_sensor.acc())
+                    rate = float(acc_sensor.acc.sr)
+                    for k in range(n_subch):
+                        acc_by_emg[col_idx + k] = acc_arr
+                        acc_sr[col_idx + k] = rate
+                col_idx += n_subch
+
+        harmonized = harmonize_multirate_inputs(
+            emg_2d=emg_2d,
+            emg_sr=emg_sr,
+            ekg_1d=ekg_1d,
+            ekg_sr=ekg_sr,
+            acc_by_emg=acc_by_emg if acc_by_emg else None,
+            acc_sr=acc_sr if acc_sr else None,
+            target_sr=emg_sr,
+        )
+
+        result = run_pipeline(
+            harmonized["emg"],
+            harmonized["sr"],
+            ekg_1d=harmonized["ekg"],
+            acc_by_emg=harmonized["acc_by_emg"] or None,
+            feature_names=feature_names,
+            time=None,
+            config=config,
+        )
+        result.diagnostics["harmonization"] = {
+            "target_sr": harmonized["sr"],
+            "n_samples": harmonized["n_samples"],
+            "has_ekg": harmonized["ekg"] is not None,
+            "n_acc_streams": len(harmonized["acc_by_emg"]),
+            "backend": "pysampled",
+        }
+
+        if in_place:
+            self._splice_emg_back(result.cleaned_emg, emg_layout)
+
+        return result
+
+    def _resolve_acc_for_emg(
+        self,
+        emg_sensor: Sensor,
+        motion: Union[str, Dict[int, Union[int, str]]],
+    ) -> Optional[Sensor]:
+        """Look up the ACC source sensor for one EMG sensor.
+
+        ``"auto"`` returns the EMG sensor itself when it carries an
+        ACC modality (typical for Trigno Avanti). A dict maps EMG sensor
+        numbers to either another sensor's number (int) or a sensor
+        ``location`` string (case-sensitive substring match — same
+        convention as :meth:`find`'s ``location`` filter).
+
+        Returns ``None`` when no ACC pair is available for this EMG
+        sensor.
+        """
+        if motion == "auto":
+            return emg_sensor if hasattr(emg_sensor, "acc") else None
+        if isinstance(motion, dict):
+            target = motion.get(emg_sensor.number)
+            if target is None:
+                return None
+            if isinstance(target, int):
+                for s in self.sensors:
+                    if s.number == target and hasattr(s, "acc"):
+                        return s
+                raise ValueError(
+                    f"motion={{{emg_sensor.number}: {target}}}: "
+                    f"sensor {target} not found or has no ACC modality."
+                )
+            if isinstance(target, str):
+                for s in self.sensors:
+                    if s.location and target in s.location and hasattr(s, "acc"):
+                        return s
+                raise ValueError(
+                    f"motion={{{emg_sensor.number}: {target!r}}}: "
+                    f"no sensor with that location carries ACC."
+                )
+            raise TypeError(
+                f"motion dict values must be int or str, got {type(target).__name__}."
+            )
+        raise ValueError(
+            f"motion must be 'auto', a dict, or None; got {motion!r}."
+        )
+
+    def _splice_emg_back(
+        self,
+        cleaned_2d: np.ndarray,
+        emg_layout: List[Tuple[Sensor, str]],
+    ) -> None:
+        """Replace EMG sample arrays in ``self.signals`` and rebuild EMG sensors.
+
+        Walks ``emg_layout`` (the same per-sensor / per-modality / per-
+        sub-channel ordering used to build the EMG matrix passed into
+        the pipeline) and column-pairs it with ``cleaned_2d``. Each
+        target :class:`Signal` is replaced by ``signal._clone(col)``,
+        preserving ``_t0`` / ``meta`` / ``_history``. Then every EMG
+        sensor is rebuilt via a fresh :class:`Sensor` construction so
+        the per-sensor ``emg`` bundle picks up the cleaned data.
+        """
+        col = 0
+        for sensor, mod in emg_layout:
+            for subchannel in SUBCHANNEL_MAP[mod]:
+                for i, sig in enumerate(self.signals):
+                    if (
+                        sig.sensor is not None
+                        and sig.sensor.number == sensor.number
+                        and sig.modality == mod
+                        and sig.subchannel == subchannel
+                    ):
+                        self.signals[i] = sig._clone(cleaned_2d[:, col])
+                        break
+                col += 1
+
+        # Defensive: in the rare case the pipeline shifts sample count
+        # (shouldn't happen since we run at one canonical rate inside),
+        # absorb any drift before the per-Sensor stack assert fires.
+        self.signals = _normalize_signal_lengths(self.signals)
+
+        affected_numbers = {s.number for s, _ in emg_layout}
+        for i, sensor in enumerate(self.sensors):
+            if sensor.number not in affected_numbers:
+                continue
+            sensor_info = SensorInfo(
+                name=sensor.name,
+                modalities=sensor.modalities,
+                number=sensor.number,
+                type_sensorlog=sensor.type_sensorlog,
+                lrc=sensor.lrc,
+                location=sensor.location,
+            )
+            self.sensors[i] = Sensor(
+                sensor_info,
+                [s for s in self.signals if s.sensor.number == sensor.number],
+            )
 
     # ------------------------------------------------------------------
     # Legacy bracket lookup (deprecated, retained indefinitely)

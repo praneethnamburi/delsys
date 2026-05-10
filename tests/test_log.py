@@ -503,3 +503,28 @@ def test_export_to_csv_uses_find_migration(fixtures_dir, tmp_path):
     out = export_dir / f"{lf.name}_emg.csv"
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
+# 0.4.0: clean_emg_ekg_artifact splice-back invariants
+# ---------------------------------------------------------------------------
+
+
+def test_clean_emg_ekg_artifact_preserves_log_shape(fixtures_dir, tmp_path):
+    """Splicing cleaned EMG back into a Log doesn't change ``len(lf.signals)``,
+    aggregate ``signal_names``, or ``meta['sensors']`` ordering."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    if lf.emg is None or lf.ekg is None:
+        pytest.skip("fixture lacks EMG or EKG")
+
+    pre_n_signals = len(lf.signals)
+    pre_emg_names = list(lf.emg.signal_names)
+    pre_emg_sensors = [s.number for s in lf.emg.meta["sensors"]]
+    pre_n_sensors = len(lf.sensors)
+
+    lf.clean_emg_ekg_artifact()
+
+    assert len(lf.signals) == pre_n_signals
+    assert lf.emg.signal_names == pre_emg_names
+    assert [s.number for s in lf.emg.meta["sensors"]] == pre_emg_sensors
+    assert len(lf.sensors) == pre_n_sensors

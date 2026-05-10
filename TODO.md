@@ -61,6 +61,23 @@ To regenerate this snapshot::
   `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
   `signal_names` / `signal_coords` convention with no caller changes.
 
+## Shipped in 0.4.0 (2026-05-10)
+
+- ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place)` —
+  end-to-end EMG/EKG artifact cleaner ported from
+  `pn-projects/projects/emg_ica_cleaning.py`. By default mutates
+  `lf.signals` in place and rebuilds the affected `Sensor.emg`
+  bundles; pass `in_place=False` to inspect diagnostics without
+  mutating.
+- ✅ `delsys.cleaning` module — building blocks for power users
+  (`fit_ica`, `score_components_against_ekg`,
+  `auto_select_ekg_components`, `reconstruct_without_components`,
+  `regress_out_ekg_from_emg`, `regress_out_motion_from_emg`,
+  `harmonize_multirate_inputs`, `run_pipeline`) plus
+  `CleaningConfig` / `CleaningResult` dataclasses.
+- ✅ Original symbol names re-exported as one-release-window aliases
+  for source-compatibility with `pn-projects/projects/emg_ica_cleaning.py`.
+
 ## Shipped in 0.3.0 (2026-05-10)
 
 - ✅ `Log.__getitem__` deprecated (docstring-only — no removal
@@ -98,15 +115,24 @@ To regenerate this snapshot::
   `NotImplementedError` on multi-channel input (was silent
   column-major flatten).
 
-### Followups (target 0.4.0)
+### Followups (target 0.5.0)
 
-- **Port `clean_emg_ekg_artifact`** (was the original 0.2 headline,
-  see "Post-0.1.0 roadmap" below). The aggregate accessor reshape
-  simplifies the splice-back step (the cleaner now sees `lf.emg` as
-  one bundle rather than a list).
 - **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
   once pysampled ships those classmethods (deferred from pysampled
-  1.2.0).
+  1.2.0). Status check: pysampled 1.2.0 explicitly pulled them
+  before release; revisit when pysampled 1.3.0 plans firm up.
+- **Plotting helpers for the cleaner.** Port
+  `plot_ica_components` / `plot_signals_before_after` from
+  `pn-projects/projects/emg_ica_cleaning.py` if a downstream caller
+  asks. Likely a `delsys.plotting` module.
+- **Realtime / overlap-add cleaning variant.** Port the chunked
+  offline `_run_pipeline_realtime` from the source if a real
+  streaming workflow shows up. Offline-only was the deliberate v1
+  scope.
+- **Drop the back-compat aliases in `delsys.cleaning`**
+  (`EMGPipelineConfig` / `EMGPipelineResult` / `fit_ica_emg` /
+  `score_ica_components_against_ekg` / `run_emg_pipeline`) once
+  downstream callers have migrated to the canonical names.
 
 ### Known limitations carrying forward
 
@@ -118,10 +144,6 @@ To regenerate this snapshot::
   `bundle["LFoot_Heel"]`) is fully repaired by `Sensor.__setstate__`,
   so this only bites code that walks `lf.signals` directly. Reloading
   the original CSV is the workaround.
-
-## Post-0.1.0 roadmap
-
-- **EMG/EKG artifact cleaning at the `Log` level.** Port `C:\dev\pn-projects\projects\emg_ica_cleaning.py` (multi-stage pipeline: harmonization → preprocess → ICA-based ECG suppression with auto-component-detection by lagged correlation → ACC-guided motion regression with safety gates) into `delsys` as a `Log.clean_emg_ekg_artifact(...)` method. The integration work is to (a) gather all EMG `Signal`s + the EKG `Signal` (and optional per-EMG ACC predictors) from `lf`, (b) run the pipeline, (c) splice cleaned samples back into `lf.signals` per channel and rebuild affected `EMG` bundles in `lf.sensors[*].emg`, since `EMG._sig` is constructed by stacking signals at `Sensor.__init__` time. The previous ACC-only `ica.py` was removed in 0.1.0 because it didn't serve this stated primary purpose.
 
 ## Resampling defaults (post-0.1.0)
 

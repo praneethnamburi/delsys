@@ -41,6 +41,13 @@
     :members:
 ```
 
+## Cleaning
+
+```{eval-rst}
+.. automodule:: delsys.cleaning
+    :members:
+```
+
 ## Metadata records
 
 ```{eval-rst}

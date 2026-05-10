@@ -46,13 +46,14 @@ from delsys._constants import (
     TARGET_SR,
 )
 from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
+from delsys.cleaning import CleaningConfig, CleaningResult
 from delsys.ekg import EKG
 from delsys.emg import EMG
 from delsys.log import Log
 from delsys.sensor import Sensor
 from delsys.signals import FSR, IMU, Signal, VO2Master
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # primary entry point
@@ -69,6 +70,9 @@ __all__ = [
     "SensorInfo",
     "SensorLog",
     "SigInfoDelsys",
+    # cleaning containers
+    "CleaningConfig",
+    "CleaningResult",
     # constants
     "TARGET_SR",
     "SUBCHANNEL_MAP",

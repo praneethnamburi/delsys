@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-10
+
+Headline feature: a `Log`-integrated EMG/EKG artifact cleaning
+pipeline. Ports the multi-stage cleaner from
+`pn-projects/projects/emg_ica_cleaning.py` (preprocess → ICA-based
+ECG suppression → ACC-guided motion regression with safety gates)
+into the package, with a clean splice-back into `lf.signals` /
+`lf.sensors[*].emg`.
+
+### Added
+
+- `Log.clean_emg_ekg_artifact(*, config, motion, in_place)` —
+  end-to-end pipeline running on every EMG channel in the Log. By
+  default mutates `lf.signals` in place and rebuilds the affected
+  `Sensor.emg` bundles; pass `in_place=False` to inspect the
+  diagnostics without mutating.
+- `delsys.cleaning` module — building blocks for users who want to
+  drive the pipeline manually (`fit_ica`,
+  `score_components_against_ekg`, `auto_select_ekg_components`,
+  `reconstruct_without_components`, `regress_out_ekg_from_emg`,
+  `regress_out_motion_from_emg`, `harmonize_multirate_inputs`,
+  `run_pipeline`).
+- `CleaningConfig` / `CleaningResult` dataclasses (re-exported from
+  `delsys`) — the configuration and result containers for
+  `Log.clean_emg_ekg_artifact`.
+
+### Internal
+
+- ECG component selection defaults to lagged-correlation
+  auto-detection. Manual override via
+  `CleaningConfig.ecg_components_to_remove`.
+- Motion regression default ACC source is sensor-paired auto-discovery
+  (Trigno Avanti sensors that carry both EMG and ACC). Custom
+  pairings via `motion={emg_num: acc_num_or_location}`.
+- Pipeline runs offline only in v1. The realtime / overlap-add
+  variant from the source is intentionally not ported — restore if
+  a real streaming use case appears.
+- No matplotlib helpers shipped. The source's
+  `plot_ica_components` / `plot_signals_before_after` belong in a
+  separate visualization module if/when a downstream caller needs
+  them.
+- `delsys.cleaning` re-exports the original symbol names from
+  `pn-projects/projects/emg_ica_cleaning.py`
+  (`EMGPipelineConfig` → `CleaningConfig`,
+  `EMGPipelineResult` → `CleaningResult`,
+  `fit_ica_emg` → `fit_ica`,
+  `score_ica_components_against_ekg` → `score_components_against_ekg`,
+  `run_emg_pipeline` → `run_pipeline`) as one-release-window aliases
+  so downstream callers can switch their import path with no other
+  changes.
+
 ## [0.3.0] - 2026-05-10
 
 Bundled cleanups: deprecates the legacy `Log.__getitem__` lookup,

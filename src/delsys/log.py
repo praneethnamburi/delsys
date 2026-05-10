@@ -25,7 +25,7 @@ from delsys._parse import (
     _parse_sig_name,
     _read_sensor_log,
 )
-from delsys._util import _mod_to_attr, _modset_to_strlist
+from delsys._util import _mod_to_attr, _modset_to_strlist, _normalize_signal_lengths
 from delsys.sensor import Sensor
 from delsys.signals import Signal
 
@@ -174,6 +174,12 @@ class Log:
                 self.t0,
                 dropped_samples_path=dropped_samples_path,
             )
+
+        # Tail-trim per-(modality, sr) drift before the per-Sensor stack
+        # asserts equal lengths. Drift originates upstream in the parsers'
+        # rounding of ``sr * duration``; normalizing here keeps the
+        # parsers' per-format quirks intact.
+        self.signals = _normalize_signal_lengths(self.signals)
 
         self.sensors: List[Sensor] = self._signals_to_sensors(sensors_info, self.signals)
         self.sensor_groups: Dict[str, Sequence[int]] = {}

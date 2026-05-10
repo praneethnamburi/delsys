@@ -243,6 +243,39 @@ def test_t0_marks_shifted(fixtures_dir, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_log_load_with_synthetic_drift_normalizes(fixtures_dir, tmp_path, monkeypatch):
+    """Inject 1-sample drift on one ACC sub-channel inside the parser; the
+    Log() constructor must call ``_normalize_signal_lengths`` before
+    grouping signals into Sensors so the same-modality length assert
+    survives drift."""
+    from delsys import _parse, log
+
+    real_parser = _parse._parse_dataframe_emgworks
+
+    def wrapped(*args, **kwargs):
+        t_min, t_max, sr_orig, signals = real_parser(*args, **kwargs)
+        # Find one ACC channel on some sensor and shorten it by 1 sample;
+        # within-Sensor stacking would otherwise trip the same-len assert
+        # because ACC is a 3-channel modality (X / Y / Z).
+        for i, sig in enumerate(signals):
+            if sig.modality == "ACC":
+                signals[i] = sig._clone(sig()[:-1])
+                break
+        return t_min, t_max, sr_orig, signals
+
+    monkeypatch.setattr(log, "_parse_dataframe_emgworks", wrapped)
+
+    src = fixtures_dir / "emgworks.csv"
+    dst = tmp_path / src.name
+    shutil.copy(src, dst)
+
+    # Without normalization, this would trip Sensor.__init__'s
+    # `len(np.unique([len(s) for s in this_signals])) == 1` assert.
+    lf = Log(str(dst))
+    acc_lens = {len(s) for s in lf.signals if s.modality == "ACC"}
+    assert len(acc_lens) == 1, f"ACC lengths still drifting: {acc_lens}"
+
+
 def test_add_sensor_group_validates_membership(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
     valid_num = lf.sensor_numbers[0]

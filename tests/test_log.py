@@ -55,15 +55,15 @@ def test_emgworks_has_emg_acc_gyro(fixtures_dir, tmp_path):
 def test_discover142_has_emg_and_emg_class_instances(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover142.csv", tmp_path)
     assert "EMGS" in lf.modalities
-    assert all(isinstance(b, EMG) for b in lf.emg)
+    assert isinstance(lf.emg, EMG)
 
 
 def test_discover164_link_has_vo2_and_hr(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover164_link.csv", tmp_path)
     assert "VO2" in lf.modalities
     assert "HR" in lf.modalities
-    assert len(lf.vo2master) == 1
-    assert isinstance(lf.vo2master[0], VO2Master)
+    assert lf.vo2master is not None
+    assert isinstance(lf.vo2master, VO2Master)
 
 
 def test_discover164_basic_has_no_link_modalities(fixtures_dir, tmp_path):
@@ -116,8 +116,8 @@ def test_log_pickle_roundtrip(fixtures_dir, tmp_path):
     assert len(lf2.signals) == len(lf.signals)
     assert lf2.modalities == lf.modalities
     # Class identity is preserved through pickle — bundles still work.
-    if lf2.emg:
-        assert isinstance(lf2.emg[0], EMG)
+    if lf2.emg is not None:
+        assert isinstance(lf2.emg, EMG)
 
 
 def test_pickle_relabels_legacy_default_labels(fixtures_dir, tmp_path):
@@ -164,15 +164,19 @@ def test_pickle_relabel_preserves_existing_meta_keys(fixtures_dir, tmp_path):
     """Relabel uses ``meta.setdefault('sensor', ...)`` so it must not stomp
     pre-existing meta keys (e.g. EKG's cached rpeak indices)."""
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)
-    assert lf.ekg, "discover170 fixture should have an EKG bundle"
-    ekg = lf.ekg[0]
-    ekg.meta["rpeaks_idx_default"] = [10, 20, 30]
+    assert lf.ekg is not None, "discover170 fixture should have an EKG bundle"
+    # Reach the per-Sensor EKG view via the source Sensor; the
+    # rpeak-meta cache lives on the per-Sensor bundle, and the aggregate
+    # rebuilds itself from the Sensors at access time.
+    sensor = next(s for s in lf.sensors if hasattr(s, "ekg"))
+    sensor.ekg.meta["rpeaks_idx_default"] = [10, 20, 30]
     # Wipe labels to mimic stale-pickle state but keep meta keys.
-    ekg.signal_names = ["s0"]
-    ekg.signal_coords = ["x"]
+    sensor.ekg.signal_names = ["s0"]
+    sensor.ekg.signal_coords = ["x"]
 
     lf2 = pickle.loads(pickle.dumps(lf))
-    ekg2 = lf2.ekg[0]
+    sensor2 = next(s for s in lf2.sensors if hasattr(s, "ekg"))
+    ekg2 = sensor2.ekg
     assert ekg2.meta["rpeaks_idx_default"] == [10, 20, 30]
     # Labels were rebuilt from defaults (the exact value depends on the
     # fixture's channelmap; the point is they no longer look defaulted).
@@ -295,8 +299,8 @@ def test_log_acc_bundle_has_meaningful_signal_names(fixtures_dir, tmp_path):
     """Loaded ACC bundles carry a non-default signal_name (one entry) and
     the canonical x/y/z signal_coords."""
     lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
-    assert lf.acc, "emgworks fixture should have ACC bundles"
-    bundle = lf.acc[0]
+    assert lf.acc is not None, "emgworks fixture should have ACC bundles"
+    bundle = lf.acc.split_by_signal_name()[0]
     assert bundle.signal_coords == ["x", "y", "z"]
     assert len(bundle.signal_names) == 1
     # No channelmap was supplied — fall back to ``ch<N>`` per the plan.
@@ -306,7 +310,7 @@ def test_log_acc_bundle_has_meaningful_signal_names(fixtures_dir, tmp_path):
 def test_log_acc_indexable_by_signal_name(fixtures_dir, tmp_path):
     """ACC bundle supports pysampled label-based indexing via its signal_name."""
     lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
-    bundle = lf.acc[0]
+    bundle = lf.acc.split_by_signal_name()[0]
     name = bundle.signal_names[0]
     sub = bundle[name]
     assert sub().shape == bundle().shape
@@ -316,7 +320,7 @@ def test_log_acc_magnitude_returns_global_l2(fixtures_dir, tmp_path):
     """Post-0.1.1: acc.magnitude() collapses x/y/z to a single L2 column,
     not three independent per-axis abs values."""
     lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
-    bundle = lf.acc[0]
+    bundle = lf.acc.split_by_signal_name()[0]
     mag = bundle.magnitude()
     assert mag().ndim == 2
     assert mag().shape[1] == 1
@@ -327,8 +331,8 @@ def test_log_emg_bundle_has_meaningful_signal_names(fixtures_dir, tmp_path):
     """EMG bundle carries a non-default signal_name (one entry per channel)
     and the modality coord ['emg']."""
     lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
-    assert lf.emg
-    bundle = lf.emg[0]
+    assert lf.emg is not None
+    bundle = lf.emg.split_by_signal_name()[0]
     assert bundle.signal_coords == ["emg"]
     # Single-channel EMGS gets one entry; multi-channel bundles get one per channel.
     assert len(bundle.signal_names) == bundle.shape[1]
@@ -336,3 +340,97 @@ def test_log_emg_bundle_has_meaningful_signal_names(fixtures_dir, tmp_path):
     # starts with the bare ``'s'`` + digit pattern from pysampled defaults.
     for name in bundle.signal_names:
         assert not (name.startswith("s") and name[1:].isdigit())
+
+
+# ---------------------------------------------------------------------------
+# 0.2.0: Log.<modality> accessors return a single aggregated bundle (or None)
+# ---------------------------------------------------------------------------
+
+
+def test_log_emg_returns_single_aggregate_bundle(fixtures_dir, tmp_path):
+    """``lf.emg`` is a single :class:`EMG` instance, not a list."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    assert isinstance(lf.emg, EMG)
+    n_emg_sensors = sum(1 for s in lf.sensors if hasattr(s, "emg"))
+    # n_signals == sum of per-sensor channels; for single-channel EMGS in
+    # the emgworks fixture this equals the number of EMG sensors.
+    assert lf.emg().shape[1] == n_emg_sensors
+
+
+def test_log_emg_signal_names_concatenated_in_sensor_order(fixtures_dir, tmp_path):
+    """Aggregate signal_names are concatenated in lf.sensors order."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    expected = []
+    for s in lf.sensors:
+        if hasattr(s, "emg"):
+            expected.extend(s.emg.signal_names)
+    assert lf.emg.signal_names == expected
+
+
+def test_log_emg_split_by_signal_name_recovers_per_sensor_count(fixtures_dir, tmp_path):
+    """``split_by_signal_name`` recovers the old list view."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    parts = lf.emg.split_by_signal_name()
+    n_emg_sensors = sum(1 for s in lf.sensors if hasattr(s, "emg"))
+    # emgworks fixture is single-channel EMGS, so per-name equals per-sensor.
+    assert len(parts) == n_emg_sensors
+
+
+def test_log_acc_aggregate_signal_coords(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    assert lf.acc.signal_coords == ["x", "y", "z"]
+
+
+def test_log_acc_x_returns_all_sensors_x_axis(fixtures_dir, tmp_path):
+    """``lf.acc.x`` returns one column per ACC sensor (all of them on x)."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    n_acc_sensors = sum(1 for s in lf.sensors if hasattr(s, "acc"))
+    x = lf.acc.x
+    assert x.signal_coords == ["x"]
+    assert x().shape[1] == n_acc_sensors
+
+
+def test_log_acc_index_by_location_returns_one_sensor(fixtures_dir, tmp_path):
+    """Indexing the aggregate ACC by signal_name picks one sensor's data."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    assert lf.acc is not None
+    name = lf.acc.signal_names[0]
+    sub = lf.acc[name]
+    # Single-name slice has 3 columns (x/y/z) for one sensor.
+    assert sub().shape[1] == 3
+    assert sub.signal_names == [name]
+
+
+def test_log_returns_none_for_absent_modality(fixtures_dir, tmp_path):
+    """An aggregate accessor returns ``None`` (not ``[]``) when no sensor
+    has that modality. Use ``vo2master`` on a basic Discover fixture —
+    no link devices means no VO2."""
+    lf = _load(fixtures_dir, "discover164_basic.csv", tmp_path)
+    assert "VO2" not in lf.modalities
+    assert lf.vo2master is None
+    assert lf.hrstrap is None
+
+
+def test_log_aggregate_meta_sensors_length_matches_signal_names(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    assert len(lf.emg.meta["sensors"]) == len(lf.emg.signal_names)
+    assert len(lf.acc.meta["sensors"]) == len(lf.acc.signal_names)
+
+
+def test_log_pickle_roundtrip_with_aggregate(fixtures_dir, tmp_path):
+    """Aggregate accessor still works after pickle round-trip."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    pre_names = list(lf.emg.signal_names)
+    blob = pickle.dumps(lf)
+    lf2 = pickle.loads(blob)
+    assert isinstance(lf2.emg, EMG)
+    assert lf2.emg.signal_names == pre_names
+
+
+def test_log_aggregate_magnitude_per_sensor(fixtures_dir, tmp_path):
+    """``lf.acc.magnitude()`` returns one mag column per ACC sensor."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    n_acc_sensors = sum(1 for s in lf.sensors if hasattr(s, "acc"))
+    mag = lf.acc.magnitude()
+    assert mag.signal_coords == ["mag"]
+    assert mag().shape[1] == n_acc_sensors

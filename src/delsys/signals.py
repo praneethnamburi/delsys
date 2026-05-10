@@ -206,12 +206,42 @@ class FSR(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
+    @staticmethod
+    def _check_per_sensor_view(s: "FSR") -> None:
+        """Guard FSR.a..d to the 4-channel per-Sensor view.
+
+        ``a/b/c/d`` are positional — "the 4th channel" has no canonical
+        meaning across heterogeneous sensors. On an aggregate FSR (8+
+        names), force the user to disambiguate.
+        """
+        if len(s.signal_names) != 4:
+            raise NotImplementedError(
+                "FSR.a/b/c/d are only meaningful on a per-Sensor view "
+                "(4 channels). For an aggregate FSR with multiple sensors, "
+                "use bundle['<location>_<position>'] or split_by_signal_name()."
+            )
+
     # Inherit ``signal_coords`` from the parent (e.g. ``["fsr"]``); only
     # ``signal_names`` differs (the parent's i-th channel name).
-    a = property(lambda s: s._clone(s()[:, 0], signal_names=[s.signal_names[0]]))
-    b = property(lambda s: s._clone(s()[:, 1], signal_names=[s.signal_names[1]]))
-    c = property(lambda s: s._clone(s()[:, 2], signal_names=[s.signal_names[2]]))
-    d = property(lambda s: s._clone(s()[:, 3], signal_names=[s.signal_names[3]]))
+    @property
+    def a(self) -> "FSR":
+        self._check_per_sensor_view(self)
+        return self._clone(self()[:, 0], signal_names=[self.signal_names[0]])
+
+    @property
+    def b(self) -> "FSR":
+        self._check_per_sensor_view(self)
+        return self._clone(self()[:, 1], signal_names=[self.signal_names[1]])
+
+    @property
+    def c(self) -> "FSR":
+        self._check_per_sensor_view(self)
+        return self._clone(self()[:, 2], signal_names=[self.signal_names[2]])
+
+    @property
+    def d(self) -> "FSR":
+        self._check_per_sensor_view(self)
+        return self._clone(self()[:, 3], signal_names=[self.signal_names[3]])
 
 
 class VO2Master(pysampled.Data):

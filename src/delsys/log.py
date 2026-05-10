@@ -646,6 +646,14 @@ class Log:
         if self.emg is None:
             raise ValueError("Log has no EMG bundle to clean.")
 
+        # Pre-flight the report path so a locked PDF (file open in another
+        # viewer) fails fast — before we burn time on the ICA fit and
+        # before the splice-back mutates ``lf.signals``.
+        if generate_report:
+            from delsys.cleaning import _check_report_path_writable
+
+            _check_report_path_writable(self.fname)
+
         # Shift the baseline up front so the per-channel dB metrics in
         # the report reflect the cleaning's effect on the AC signal rather
         # than a constant offset in the raw input. This also feeds a

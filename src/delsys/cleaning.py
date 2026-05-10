@@ -1062,7 +1062,10 @@ def _band_power(sig_1d: np.ndarray, sr: float, lo: float, hi: float) -> float:
     band = (f >= float(lo)) & (f <= float(hi))
     if not np.any(band):
         return 0.0
-    integrate = getattr(np, "trapezoid", np.trapz)
+    # ``np.trapezoid`` is the NumPy 2.0 spelling (also present in 1.26+).
+    # The 1.x ``np.trapz`` was removed in 2.0, so a ``getattr(..., default)``
+    # would still trip the expired-attribute error on the default branch.
+    integrate = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
     return float(integrate(p[band], f[band]))
 
 
@@ -1093,6 +1096,35 @@ def _resolve_default_report_path(result: "CleaningResult") -> Path:
         )
     src = Path(result.fname)
     return src.parent / f"{src.stem}_cleaning_report.pdf"
+
+
+def _check_report_path_writable(source_fname: Optional[str]) -> None:
+    """Raise :class:`PermissionError` early if the auto-report path is locked.
+
+    Called from :class:`Log.clean_emg_ekg_artifact` before the cleaning
+    pipeline runs, so a PDF that's open in another viewer fails the call
+    up front instead of after a minute of ICA work plus an in-place
+    splice. No-op when there's no source path (no auto-report would be
+    written) or when the target file does not yet exist.
+    """
+    if source_fname is None:
+        return
+    src = Path(source_fname)
+    target = src.parent / f"{src.stem}_cleaning_report.pdf"
+    if not target.exists():
+        return
+    try:
+        # ``r+b`` opens for read+write without truncating — touches the
+        # OS lock the same way ``PdfPages`` will, so a held lock surfaces
+        # here.
+        with open(target, "r+b"):
+            pass
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Cannot write the auto-report to {target} — the file is "
+            "open in another program. Close it and re-run, or pass "
+            "generate_report=False to skip the PDF step."
+        ) from exc
 
 
 def _build_summary_rows(result: "CleaningResult") -> Tuple[List[int], List[Dict[str, Any]]]:

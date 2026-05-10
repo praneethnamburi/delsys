@@ -560,6 +560,35 @@ def test_log_clean_auto_report_opt_out(fixtures_dir, tmp_path):
     assert not expected.exists()
 
 
+def test_log_clean_auto_report_locked_fails_fast(fixtures_dir, tmp_path, monkeypatch):
+    """A locked report PDF (e.g. open in a viewer) must fail before the
+    cleaning pipeline runs, so the user doesn't get a half-applied
+    in-place splice with no fresh report to match."""
+    import builtins
+
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    target = tmp_path / "discover170_cleaning_report.pdf"
+    # Seed an existing PDF so the lock check has a target to look at.
+    target.write_bytes(b"%PDF-1.4\n%stub\n")
+
+    # Simulate the OS-level lock by making ``open(target, 'r+b')`` raise
+    # PermissionError — cross-platform stand-in for a held write lock.
+    real_open = builtins.open
+
+    def fake_open(file, mode="r", *args, **kwargs):
+        if str(file) == str(target) and "r+b" in mode:
+            raise PermissionError(13, "locked by another process", str(file))
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+
+    raw_before = lf.emg().copy()
+    with pytest.raises(PermissionError, match="open in another program"):
+        lf.clean_emg_ekg_artifact()
+    # The pipeline didn't run — lf.emg is untouched.
+    np.testing.assert_array_equal(lf.emg(), raw_before)
+
+
 def test_review_constructs_and_keys_advance_channel(fixtures_dir, tmp_path):
     """``review()`` builds a figure and the key handler advances the channel index."""
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)

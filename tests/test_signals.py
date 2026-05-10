@@ -429,6 +429,51 @@ def test_fsr_channel_inherits_fallback_letters():
 # ---------------------------------------------------------------------------
 
 
+def test_imu_axis_works_on_aggregate_shape():
+    """``imu.x`` on a multi-sensor aggregate IMU returns one column per
+    sensor (all of them on the X axis), with signal_coords=['x'] and
+    signal_names preserved across sensors."""
+    si_l = _sensor_info({"ACC"}, number=1, location="L")
+    si_r = _sensor_info({"ACC"}, number=2, location="R")
+    sig = np.column_stack(
+        [
+            np.full(100, 1.0),  # L_x
+            np.full(100, 2.0),  # L_y
+            np.full(100, 3.0),  # L_z
+            np.full(100, 11.0),  # R_x
+            np.full(100, 12.0),  # R_y
+            np.full(100, 13.0),  # R_z
+        ]
+    )
+    agg = IMU(
+        sig,
+        sr=120.0,
+        axis=0,
+        t0=0.0,
+        meta={"sensors": [si_l, si_r]},
+        signal_names=["L", "R"],
+        signal_coords=["x", "y", "z"],
+    )
+    x = agg.x
+    assert x().shape == (100, 2)
+    assert x.signal_names == ["L", "R"]
+    assert x.signal_coords == ["x"]
+    # Columns are L_x then R_x — taken from the agg's name-major layout.
+    assert np.allclose(x()[:, 0], 1.0)
+    assert np.allclose(x()[:, 1], 11.0)
+
+
+def test_imu_axis_per_sensor_unchanged():
+    """Pin the 0.1.1 per-Sensor behavior: imu.x on a single-sensor IMU
+    returns a single-column IMU with signal_coords=['x'] and the
+    per-Sensor signal_name."""
+    sensor = _build_sensor("ACC", "LBicep")
+    acc = sensor.acc
+    x = acc.x
+    assert x.signal_coords == ["x"]
+    assert x.signal_names == ["LBicep"]
+
+
 def test_bundle_sensors_property_per_sensor():
     """Per-Sensor bundles carry meta['sensor'] (singular). The new ``.sensors``
     plural property returns a length-1 list with that record so user code can

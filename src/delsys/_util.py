@@ -1,7 +1,18 @@
 """Small utility helpers used across the delsys package."""
 
 import re
-from typing import List, Optional, Set
+import warnings
+from collections import defaultdict
+from typing import TYPE_CHECKING, List, Optional, Set
+
+if TYPE_CHECKING:
+    from delsys.signals import Signal
+
+#: Sample-count span (max - min within a same-(modality, sr) group) considered
+#: "normal" floating-point drift from the per-channel resample step. Anything
+#: above this is escalated to a :class:`UserWarning` because it usually means
+#: a parser quirk rather than a quantization rounding.
+_DRIFT_TOLERANCE: int = 4
 
 #: Sub-channel keys we expect inside FSR / Quattro location parentheticals.
 #: ``"FSR"`` channelmap entries use numeric keys (``1``/``2``/``3``/``4``);
@@ -150,3 +161,62 @@ def _parse_fsr_quattro_positions(
         return None
 
     return ordered
+
+
+def _normalize_signal_lengths(signals: List["Signal"]) -> List["Signal"]:
+    """Tail-trim same-(modality, sr) signals to a common length.
+
+    Channels that nominally share a sampling rate can end up with sample
+    counts that differ by 1-2 because each parser computes per-channel
+    lengths from a slightly different rounding of ``sr * duration``. The
+    drift trips :class:`Sensor`'s same-modality ``len`` assert when the
+    user actually tries to stack. This helper closes the gap by trimming
+    every signal in a group down to the group's minimum length, leaving
+    ``_t0`` untouched (the drift is at the right edge anyway).
+
+    Tail-trim, not pad: padding with zeros / NaN / extrapolated values
+    would inject artifacts into downstream filters; a 1-2 sample tail
+    trim at 1920 Hz is well below any analysis tolerance.
+
+    A drift larger than :data:`_DRIFT_TOLERANCE` triggers a
+    :class:`UserWarning` — that's the "something weird is going on"
+    tripwire, not the normal case.
+
+    Args:
+        signals: Per-channel :class:`Signal` objects produced by the
+            per-format parser.
+
+    Returns:
+        New list (same order as input). Signals already at ``min_len`` are
+        passed through by identity; longer ones are replaced with a
+        ``_clone(s()[:min_len])`` that preserves ``_t0``, ``meta``, and
+        ``_history``.
+    """
+    groups: "defaultdict[tuple, List[int]]" = defaultdict(list)
+    for idx, sig in enumerate(signals):
+        groups[(sig.modality, sig.sr)].append(idx)
+
+    out: List["Signal"] = list(signals)
+    for (modality, sr), idxs in groups.items():
+        lens = [len(out[i]) for i in idxs]
+        min_len = min(lens)
+        max_len = max(lens)
+        if min_len <= 0:
+            # Defensive: a zero-length channel will already trip the
+            # downstream Sensor assert with a clearer signal.
+            continue
+        if max_len == min_len:
+            continue
+        if max_len - min_len > _DRIFT_TOLERANCE:
+            warnings.warn(
+                f"Same-rate length drift exceeds tolerance for modality="
+                f"{modality!r} sr={sr}: span={max_len - min_len} samples "
+                f"(min={min_len}, max={max_len}). Trimming to min.",
+                UserWarning,
+                stacklevel=2,
+            )
+        for i in idxs:
+            sig = out[i]
+            if len(sig) > min_len:
+                out[i] = sig._clone(sig()[:min_len])
+    return out

@@ -154,14 +154,15 @@ class IMU(pysampled.Data):
         """Shape of the underlying sample array."""
         return self._sig.shape
 
-    # Inherit signal_names from the parent so a single-axis IMU still carries
-    # its sensor label (e.g. ``"LBicep"``); only ``signal_coords`` is pinned
-    # to the chosen axis. ``_clone`` defaults inherit the parent's
-    # ``signal_names`` automatically when ``n_signals`` is unchanged, so we
-    # only need to override ``signal_coords``.
-    x = property(lambda s: s._clone(s()[:, 0], signal_coords=["x"]))
-    y = property(lambda s: s._clone(s()[:, 1], signal_coords=["y"]))
-    z = property(lambda s: s._clone(s()[:, 2], signal_coords=["z"]))
+    # Coord-lookup so the same accessor works on per-Sensor IMU (n, 3) and
+    # aggregate IMU (n, 3*N). pysampled's ``__getitem__`` slices the columns
+    # whose ``signal_coord`` matches the key, returning a child whose
+    # ``signal_coords == ["<axis>"]`` with ``signal_names`` preserved.
+    # Per-Sensor result: shape (n, 1), names=["LBicep"], coords=["x"].
+    # Aggregate result: shape (n, N), names=["LBicep","RBicep",...], coords=["x"].
+    x = property(lambda s: s["x"])
+    y = property(lambda s: s["y"])
+    z = property(lambda s: s["z"])
 
 
 class FSR(pysampled.Data):

@@ -56,6 +56,18 @@ SUBCHANNEL_MAP: Dict[str, Tuple[str, ...]] = {
     "HR": ("HeartRate",),
 }
 
+#: Sub-channel keys expected inside the FSR / Quattro channelmap location
+#: parenthetical (e.g. ``LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)``).
+#: ``"FSR"`` entries use numeric keys (``1``/``2``/``3``/``4``); ``"EMGQ"``
+#: (Quattro) uses letters (``A``/``B``/``C``/``D``). This is the textual
+#: convention the parenthetical is parsed against — distinct from
+#: :data:`SUBCHANNEL_MAP`, which is the canonical sub-channel ordering used
+#: when stacking per-channel arrays into modality bundles.
+_SUBCHANNEL_KEYS: Dict[str, Tuple[str, ...]] = {
+    "FSR": ("1", "2", "3", "4"),
+    "EMGQ": ("A", "B", "C", "D"),
+}
+
 #: Recognized acquisition applications. The header parser uses this to gate
 #: which per-format reader runs.
 APPLICATIONS: Tuple[str, ...] = ("EMGworks", "Trigno Discover")

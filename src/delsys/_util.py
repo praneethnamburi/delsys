@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, List, Optional, Set, Type
 import numpy as np
 import pysampled
 
+from delsys._constants import _SUBCHANNEL_KEYS
+
 if TYPE_CHECKING:
     from delsys.signals import Signal
 
@@ -16,14 +18,6 @@ if TYPE_CHECKING:
 #: above this is escalated to a :class:`UserWarning` because it usually means
 #: a parser quirk rather than a quantization rounding.
 _DRIFT_TOLERANCE: int = 4
-
-#: Sub-channel keys we expect inside FSR / Quattro location parentheticals.
-#: ``"FSR"`` channelmap entries use numeric keys (``1``/``2``/``3``/``4``);
-#: ``"EMGQ"`` (Quattro) uses letters (``A``/``B``/``C``/``D``).
-_SUBCHANNEL_KEYS = {
-    "FSR": ("1", "2", "3", "4"),
-    "EMGQ": ("A", "B", "C", "D"),
-}
 
 #: Match a single ``key-name`` token inside the channelmap parenthetical,
 #: tolerating surrounding whitespace. ``name`` is captured greedily up to

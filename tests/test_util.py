@@ -239,6 +239,21 @@ def test_normalize_lengths_warns_on_excessive_drift():
         _normalize_signal_lengths(signals)
 
 
+def test_normalize_lengths_tolerates_signal_with_empty_meta():
+    """A signal with no ``modality`` key in meta (e.g. very-old pickles)
+    should still pass through length normalization without crashing —
+    callers downstream of the normalization shouldn't have to know about
+    that breed of signal."""
+    sig_normal = _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1)
+    # Construct a signal with empty meta directly — bypasses the per-format parser.
+    sig_broken = Signal(
+        np.arange(100, dtype=float), 1920.0, t0=0.0, meta={}
+    )
+    out = _normalize_signal_lengths([sig_normal, sig_broken])
+    assert len(out) == 2
+    assert out[1].meta == {}
+
+
 def test_normalize_lengths_preserves_meta_and_history():
     signals = [
         _make_signal(100, modality="EMGS", subchannel="A", sensor_number=1),

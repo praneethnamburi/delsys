@@ -191,7 +191,13 @@ def _normalize_signal_lengths(signals: List["Signal"]) -> List["Signal"]:
     """
     groups: "defaultdict[tuple, List[int]]" = defaultdict(list)
     for idx, sig in enumerate(signals):
-        groups[(sig.modality, sig.sr)].append(idx)
+        # Read modality defensively — signals with empty meta (very-old
+        # pickles, or anything that bypassed the per-format parser) still
+        # need to participate in length normalization or the per-Sensor
+        # stack assert downstream will fire on them. They land in their
+        # own ``(None, sr)`` group, which is fine.
+        modality = sig.meta.get("modality") if sig.meta else None
+        groups[(modality, sig.sr)].append(idx)
 
     out: List["Signal"] = list(signals)
     for (modality, sr), idxs in groups.items():

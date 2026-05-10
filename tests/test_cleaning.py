@@ -303,6 +303,51 @@ def _load(fixtures_dir, name, tmp_path):
     return Log(str(dst))
 
 
+def test_log_clean_in_place_tolerates_orphan_signal(fixtures_dir, tmp_path):
+    """A signal whose ``meta`` no longer carries a ``sensor`` (e.g. very-old
+    pickles where per-Signal meta was dropped) used to crash the
+    splice-back's per-sensor rebuild listcomp via ``s.sensor.number``.
+    The clean run should now skip those signals gracefully."""
+    from delsys.signals import Signal
+
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    assert lf.emg is not None and lf.ekg is not None
+
+    # Append an "orphan" signal (no sensor in meta) to lf.signals.
+    # This mimics a partially-recovered old-pickle Log.
+    orphan = Signal(
+        np.zeros(lf.signals[0]().shape[0]), float(lf.signals[0].sr),
+        t0=0.0, meta={},
+    )
+    lf.signals.append(orphan)
+
+    # Should run without an AttributeError on s.sensor.number.
+    result = lf.clean_emg_ekg_artifact(generate_report=False)
+    assert isinstance(result, CleaningResult)
+
+
+def test_log_clean_in_place_tolerates_old_pickle_meta(fixtures_dir, tmp_path):
+    """Mimic a very-old pickle: every per-Signal ``meta`` is empty, but
+    per-Sensor bundles are intact (Sensor.__setstate__ repaired them).
+    The splice-back should update each sensor's ``emg`` bundle directly
+    rather than crash trying to find signals by sensor.number."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    assert lf.emg is not None and lf.ekg is not None
+
+    pre_emg = lf.emg().copy()
+    # Wipe per-Signal meta (mimics an old pickle).
+    for sig in lf.signals:
+        sig.meta.clear()
+
+    result = lf.clean_emg_ekg_artifact(generate_report=False)
+    assert isinstance(result, CleaningResult)
+
+    # Bundle-level access reflects the cleaning (the per-Signal splice
+    # is a no-op on this Log, but the per-bundle update applies).
+    assert not np.array_equal(lf.emg(), pre_emg)
+    np.testing.assert_allclose(lf.emg(), result.cleaned_emg)
+
+
 def test_log_clean_in_place_preserves_invariants(fixtures_dir, tmp_path):
     """Splice-back keeps every structural invariant: signal count,
     aggregate signal_names, sensors[*].emg labels, sensor count."""

@@ -809,9 +809,12 @@ class Log:
         sub-channel ordering used to build the EMG matrix passed into
         the pipeline) and column-pairs it with ``cleaned_2d``. Each
         target :class:`Signal` is replaced by ``signal._clone(col)``,
-        preserving ``_t0`` / ``meta`` / ``_history``. Then every EMG
-        sensor is rebuilt via a fresh :class:`Sensor` construction so
-        the per-sensor ``emg`` bundle picks up the cleaned data.
+        preserving ``_t0`` / ``meta`` / ``_history``. Then each affected
+        sensor's ``emg`` bundle is replaced with a fresh
+        :class:`pysampled.Data._clone` of the cleaned block, so
+        ``lf.emg`` reflects the cleaning even on very-old pickles where
+        per-:class:`Signal` ``meta`` is empty (and the per-Signal splice
+        above silently no-ops).
         """
         col = 0
         for sensor, mod in emg_layout:
@@ -832,22 +835,19 @@ class Log:
         # absorb any drift before the per-Sensor stack assert fires.
         self.signals = _normalize_signal_lengths(self.signals)
 
-        affected_numbers = {s.number for s, _ in emg_layout}
-        for i, sensor in enumerate(self.sensors):
-            if sensor.number not in affected_numbers:
-                continue
-            sensor_info = SensorInfo(
-                name=sensor.name,
-                modalities=sensor.modalities,
-                number=sensor.number,
-                type_sensorlog=sensor.type_sensorlog,
-                lrc=sensor.lrc,
-                location=sensor.location,
-            )
-            self.sensors[i] = Sensor(
-                sensor_info,
-                [s for s in self.signals if s.sensor.number == sensor.number],
-            )
+        # Update each affected sensor's ``emg`` bundle directly from the
+        # cleaned block. ``_clone`` preserves the bundle's
+        # ``signal_names`` / ``signal_coords`` / ``meta``, so the
+        # aggregate ``lf.emg`` view stays well-labelled.
+        col = 0
+        sensors_by_number = {s.number: s for s in self.sensors}
+        for sensor, mod in emg_layout:
+            n_subch = len(SUBCHANNEL_MAP[mod])
+            block = cleaned_2d[:, col : col + n_subch]
+            target = sensors_by_number.get(sensor.number)
+            if target is not None and hasattr(target, "emg"):
+                target.emg = target.emg._clone(block)
+            col += n_subch
 
     # ------------------------------------------------------------------
     # Legacy bracket lookup (deprecated, retained indefinitely)

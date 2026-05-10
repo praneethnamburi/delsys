@@ -150,3 +150,51 @@ def test_get_features_to_dataframe(burst_emg):
     feats = pd.DataFrame(emg.get_features(kind="temp", win_size=0.25, win_inc=0.1))
     assert isinstance(feats, pd.DataFrame)
     assert "mean" in feats.columns
+
+
+# ---------------------------------------------------------------------------
+# 0.2.0: multi-channel input handling
+# ---------------------------------------------------------------------------
+
+
+def _multi_channel_emg(n_channels=2, sr=2000.0, dur=2.0):
+    """Build a synthetic multi-sensor aggregate EMG bundle."""
+    rng = np.random.RandomState(0)
+    t = np.linspace(0, dur, int(dur * sr), endpoint=False)
+    sig = 0.05 * rng.randn(len(t), n_channels)
+    sensors = [
+        SensorInfo(
+            name=f"emg{i}",
+            modalities={"EMGS"},
+            number=i + 1,
+            type_sensorlog=None,
+            lrc="C",
+            location=f"S{i}",
+        )
+        for i in range(n_channels)
+    ]
+    return EMG(
+        sig,
+        sr=sr,
+        t0=0.0,
+        meta={"sensors": sensors},
+        signal_names=[f"S{i}" for i in range(n_channels)],
+        signal_coords=["emg"],
+    )
+
+
+def test_emg_process_envelope_on_multi_channel_aggregate():
+    """Envelope-family amp_kind values flow through pysampled's 2D-aware
+    chain, so they work on a multi-sensor aggregate without complaint."""
+    emg = _multi_channel_emg(n_channels=2)
+    out = emg.process(amp_kind="envelope2")
+    assert isinstance(out, EMG)
+    assert out().shape[1] == 2
+
+
+def test_emg_process_nk_raises_on_multi_channel():
+    """``amp_kind="nk"`` calls into NeuroKit2's emg_amplitude which is 1D
+    only — guard with a NotImplementedError that points at split."""
+    emg = _multi_channel_emg(n_channels=2)
+    with pytest.raises(NotImplementedError, match="split_by_signal_name"):
+        emg.process(amp_kind="nk")

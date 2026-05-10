@@ -142,3 +142,53 @@ def test_flip_signal_toggles_flag(synthetic_ekg):
     assert synthetic_ekg.meta["is_flipped"] is not initial
     synthetic_ekg.flip_signal()
     assert synthetic_ekg.meta["is_flipped"] is initial
+
+
+# ---------------------------------------------------------------------------
+# 0.2.0: find_rpeaks_pn rejects multi-channel input
+# ---------------------------------------------------------------------------
+
+
+def _two_channel_ekg(sr=SR, duration=DURATION_S):
+    sig = nk.ecg_simulate(
+        duration=duration, sampling_rate=int(sr), heart_rate=HEART_RATE_BPM, random_state=0
+    )
+    sig_2col = np.column_stack([sig, sig])
+    sensors = [
+        SensorInfo(
+            name=f"ekg{i}",
+            modalities={"EKG"},
+            number=i + 1,
+            type_sensorlog=None,
+            lrc="C",
+            location=f"Chest{i}",
+        )
+        for i in range(2)
+    ]
+    return EKG(
+        sig_2col,
+        sr=sr,
+        t0=0.0,
+        meta={"sensors": sensors},
+        signal_names=["Chest0", "Chest1"],
+        signal_coords=["ekg"],
+    )
+
+
+def test_ekg_find_rpeaks_pn_raises_on_multi_channel():
+    """Multi-channel EKG aggregates can't go through HeartPy's 1D peak
+    detector. Raise NotImplementedError that points at split."""
+    agg = _two_channel_ekg()
+    with pytest.raises(NotImplementedError, match="split_by_signal_name"):
+        agg.find_rpeaks_pn()
+
+
+def test_ekg_find_rpeaks_pn_works_on_split():
+    """Documented migration path: split the aggregate by signal_name and
+    detect peaks on each per-channel slice."""
+    agg = _two_channel_ekg()
+    parts = agg.split_by_signal_name()
+    assert len(parts) == 2
+    peaks = parts[0].find_rpeaks_pn()
+    rate = 60 * len(peaks) / DURATION_S
+    assert abs(rate - HEART_RATE_BPM) < 5

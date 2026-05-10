@@ -189,7 +189,19 @@ class EKG(pysampled.Data):
             Edits :attr:`meta` in place — sets ``rpeaks_idx_default`` and
             ``rpeaks_idx_removed``. Manual ``rpeaks_idx_added`` entries are
             preserved.
+
+        Raises:
+            NotImplementedError: If the bundle holds more than one channel
+                (i.e. an aggregate EKG). HeartPy expects a 1D series; use
+                ``ekg.split_by_signal_name()[i]`` to pick one channel
+                first.
         """
+        if self.n_signals() > 1:
+            raise NotImplementedError(
+                "find_rpeaks_pn requires a single EKG channel. Use "
+                "ekg['<sensor_location>'] or "
+                "ekg.split_by_signal_name()[i] to select one."
+            )
         sig = copy.deepcopy(self)
         if "is_flipped" in self.meta and self.meta["is_flipped"]:
             sig = sig.apply(lambda x: -x)

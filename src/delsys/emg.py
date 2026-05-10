@@ -139,6 +139,13 @@ class EMG(pysampled.Data):
         elif amp_kind == "envelope2":
             proc_sig3 = proc_sig12.envelope2(lowpass=10)
         elif amp_kind == "nk":
+            if self.n_signals() > 1:
+                raise NotImplementedError(
+                    "EMG.process(amp_kind='nk') requires single-channel "
+                    "input — NeuroKit2's emg_amplitude is 1D-only. Use "
+                    "bundle.split_by_signal_name() and process each "
+                    "per-channel slice."
+                )
             proc_sig3 = nk.emg_amplitude(proc_sig12().flatten())
         else:
             raise ValueError

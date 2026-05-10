@@ -349,3 +349,73 @@ def test_sensor_acc_indexable_by_location():
     acc = sensor.acc
     sub = acc[acc.signal_names[0]]
     assert sub().shape == acc().shape
+
+
+# ---------------------------------------------------------------------------
+# Sub-channel views — IMU.x/y/z, FSR.a..d, VO2Master.* inherit parent labels
+# ---------------------------------------------------------------------------
+
+
+def test_imu_axis_inherits_parent_signal_name():
+    """IMU.x/y/z share the parent's signal_names and pin signal_coords to one axis."""
+    sensor = _build_sensor("ACC", "LBicep")
+    acc = sensor.acc
+    assert acc.x.signal_names == ["LBicep"]
+    assert acc.x.signal_coords == ["x"]
+    assert acc.y.signal_coords == ["y"]
+    assert acc.z.signal_coords == ["z"]
+
+
+def test_imu_magnitude_collapses_to_single_signal():
+    """After labels propagate, IMU.magnitude() returns shape (n, 1) not (n, 3)."""
+    sensor = _build_sensor("ACC", "LBicep", n_samples=100)
+    mag = sensor.acc.magnitude()
+    assert mag().ndim == 2
+    assert mag().shape[1] == 1
+    # pysampled 1.2.0 sets signal_coords=['mag'] on magnitude output.
+    assert mag.signal_coords == ["mag"]
+
+
+def test_fsr_channel_inherits_parent_coords():
+    """FSR.a..d carry one signal_name (the parent's i-th) and the parent's coords."""
+    sensor = _build_sensor("FSR", "LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)")
+    fsr = sensor.fsr
+    assert fsr.a.signal_names == ["LFoot_Heel"]
+    assert fsr.b.signal_names == ["LFoot_OuterEdge"]
+    assert fsr.c.signal_names == ["LFoot_Ball"]
+    assert fsr.d.signal_names == ["LFoot_Toe"]
+    assert fsr.a.signal_coords == fsr.signal_coords  # ['fsr']
+
+
+def test_fsr_channel_inherits_fallback_letters():
+    sensor = _build_sensor("FSR", "LFoot")
+    fsr = sensor.fsr
+    assert fsr.a.signal_names == ["LFoot_A"]
+    assert fsr.d.signal_names == ["LFoot_D"]
+
+
+def test_vo2master_channel_inherits_parent_coords():
+    """VO2Master.* carry the parent's i-th signal name and the parent's coords."""
+    vo2_subs = (
+        "Resp.Rate",
+        "TidalVol.",
+        "Ventilation(L/min)",
+        "FeO2(%)",
+        "VO2Absolute",
+        "AmbientPressure",
+        "FlowSensor",
+        "OxygenSensor",
+    )
+    sensor = _build_sensor("VO2", None, subchannels=vo2_subs, number=900)
+    vo2 = sensor.vo2master
+    assert vo2.rr.signal_names == ["resp_rate"]
+    assert vo2.td.signal_names == ["tidal_vol"]
+    assert vo2.vent.signal_names == ["ventilation"]
+    assert vo2.Feo2.signal_names == ["feo2"]
+    assert vo2.vo2.signal_names == ["vo2_absolute"]
+    assert vo2.ap.signal_names == ["ambient_pressure"]
+    assert vo2.fl.signal_names == ["flow_sensor"]
+    assert vo2.o2_hum.signal_names == ["oxygen_sensor_humidity"]
+    # All keep the parent's coords (['value']).
+    assert vo2.rr.signal_coords == vo2.signal_coords
+    assert vo2.o2_hum.signal_coords == vo2.signal_coords

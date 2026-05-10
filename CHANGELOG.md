@@ -59,6 +59,12 @@ under the "breaking change → minor on 0.x" semver-on-0.x convention.
   slice silently returned only the first sensor's column on multi-
   sensor input.
 
+### Internal
+
+- Moved `_SUBCHANNEL_KEYS` (FSR / Quattro channelmap parenthetical
+  key format) from `_util.py` to `_constants.py` alongside
+  `SUBCHANNEL_MAP`. No public API change.
+
 ### Migration
 
 | Before (0.1.x)                | After (0.2.0)                                       |

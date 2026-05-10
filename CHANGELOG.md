@@ -112,6 +112,29 @@ into the package, with a clean splice-back into `lf.signals` /
   so downstream callers can switch their import path with no other
   changes.
 
+### Fixed
+
+- `clean_emg_ekg_artifact()` no longer crashes on `Log` objects
+  loaded from very-old pickles where the per-:class:`Signal` ``meta``
+  dict is empty. `_normalize_signal_lengths` reads ``meta.get("modality")``
+  defensively; the splice-back updates each affected sensor's
+  ``emg`` bundle via :meth:`pysampled.Data._clone` instead of
+  rebuilding the whole :class:`Sensor` from ``lf.signals`` — so the
+  cleaning lands on ``lf.emg`` even when per-:class:`Signal` access
+  paths can't be repaired.
+- Auto-report path is checked for write access *before* the cleaning
+  pipeline runs. A locked PDF (file open in another viewer) now
+  raises a clear :class:`PermissionError` with a "close it and
+  re-run, or pass ``generate_report=False``" hint up front — no more
+  wasted ICA work plus a half-applied in-place splice with no fresh
+  report to match it.
+- `_band_power` (Welch integral used by the report's `ecg-band dB`
+  column) is NumPy 2.0-compatible. The previous
+  `getattr(np, "trapezoid", np.trapz)` fallback evaluated the
+  default eagerly and tripped the expired-attribute error on NumPy
+  2.0; the new form uses `hasattr(np, "trapezoid")` so the legacy
+  `np.trapz` is only accessed on NumPy < 1.26.
+
 ## [0.3.0] - 2026-05-10
 
 Bundled cleanups: deprecates the legacy `Log.__getitem__` lookup,

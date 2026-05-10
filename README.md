@@ -33,12 +33,14 @@ import delsys
 
 lf = delsys.Log("path/to/Trial.csv", sensor_map="path/to/delsys_channelmap.txt")
 
-# Direct accessors — list of typed bundles, one per sensor with that modality.
-lf.emg                            # list of EMG bundles
-lf.ekg                            # list of EKG bundles
-lf.acc, lf.gyro                   # tri-axial IMU bundles
-lf.fsr                            # 4-channel FSR bundles
-lf.analog                         # raw Analog signals
+# Direct accessors — each returns a single aggregated `pysampled.Data`
+# per modality (channels stacked across every sensor that has it), or
+# `None` if no sensor does.
+lf.emg                            # aggregate EMG
+lf.ekg                            # aggregate EKG
+lf.acc, lf.gyro                   # aggregate IMU
+lf.fsr                            # aggregate FSR
+lf.analog                         # aggregate Analog
 lf.vo2master                      # VO2 Master link device (8 channels)
 lf.hrstrap                        # HR Strap link device
 
@@ -51,11 +53,43 @@ lf.find(location="Forearm")                    # any sensor at "Forearm"
 lf.find(sensor_number=5)
 lf.find(modality="EMG", as_="signal")          # raw per-channel Signal objects
 
-# A typical EMG envelope pipeline.
-for emg in lf.emg:
+# A typical EMG envelope pipeline (operate per-sensor).
+for emg in lf.emg.split_by_signal_name():
     envelope = emg.process(amp_kind="envelope2")
     rms = emg.rms(envelope_sr=240)             # clean RMS amplitude pipeline
 ```
+
+## Cleaning ECG and motion artifact from EMG
+
+`Log.clean_emg_ekg_artifact()` runs a three-stage pipeline
+(preprocess → ICA-based ECG suppression → ACC-guided motion regression
+with safety gates) over every EMG channel in the Log, splices the
+cleaned matrix back into `lf.signals`, and writes a multi-page PDF
+report next to the source CSV.
+
+```python
+lf = delsys.Log("trial.csv")
+
+# Default: in-place clean + PDF report.
+result = lf.clean_emg_ekg_artifact()
+
+# Inspect without mutating.
+result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
+
+# Splice only the ECG-cleaned variant back (e.g. when the motion stage
+# is over-cleaning on this trial).
+lf.clean_emg_ekg_artifact(splice_source="ekgonly")
+```
+
+Interactive helpers:
+
+- `result.review()` — cycle through every EMG channel, raw vs each
+  cleaning variant, with arrow-key navigation.
+- `result.review_components()` — cycle through the ICA components plus
+  their top three input contributors.
+
+See [`tutorials/cleaning_emg_ekg_artifact.md`](https://github.com/praneethnamburi/delsys/blob/main/tutorials/cleaning_emg_ekg_artifact.md)
+for the full walkthrough.
 
 See the full API reference at <https://delsys.readthedocs.io>.
 

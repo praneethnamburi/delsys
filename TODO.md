@@ -104,6 +104,16 @@ To regenerate this snapshot::
   enough for ICA to converge cleanly.
 - ✅ Original symbol names re-exported as one-release-window aliases
   for source-compatibility with `pn-projects/projects/emg_ica_cleaning.py`.
+- ✅ Defensive guards for very-old pickles: `_normalize_signal_lengths`
+  reads `meta.get("modality")` instead of the hard property; the
+  splice-back updates `sensor.emg` directly via `pysampled.Data._clone`
+  so cleaning lands on `lf.emg` even when per-Signal meta is empty.
+- ✅ Auto-report path is pre-flight-checked for write access — a locked
+  PDF raises a clear `PermissionError` before any work is done, rather
+  than mutating `lf.signals` and then failing on the PDF write.
+- ✅ NumPy 2.0 compatibility for the Welch-integral helper used by the
+  report's `ecg-band dB` column (switched from
+  `getattr(np, "trapezoid", np.trapz)` to `hasattr(np, "trapezoid")`).
 
 ## Shipped in 0.3.0 (2026-05-10)
 

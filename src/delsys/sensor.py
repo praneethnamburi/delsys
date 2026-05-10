@@ -82,6 +82,13 @@ class Sensor:
             if a signal's ``.sensor`` does not match ``sensor_info``, or if
             channels of one modality have inconsistent sample counts or
             ``t0``.
+
+    Note:
+        Construction via :class:`Log` runs every signal through
+        :func:`delsys._util._normalize_signal_lengths` first, so the
+        same-modality length assert is a safety net rather than a
+        tripwire on that path. Direct callers building a :class:`Sensor`
+        from un-normalized signals are responsible for length consistency.
     """
 
     def __init__(self, sensor_info: SensorInfo, signal_list: List[Signal]) -> None:

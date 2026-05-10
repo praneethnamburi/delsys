@@ -25,9 +25,16 @@ from delsys._parse import (
     _parse_sig_name,
     _read_sensor_log,
 )
-from delsys._util import _mod_to_attr, _modset_to_strlist, _normalize_signal_lengths
+from delsys._util import (
+    _aggregate_bundles,
+    _mod_to_attr,
+    _modset_to_strlist,
+    _normalize_signal_lengths,
+)
+from delsys.ekg import EKG
+from delsys.emg import EMG
 from delsys.sensor import Sensor
-from delsys.signals import Signal
+from delsys.signals import FSR, IMU, Signal, VO2Master
 
 
 class Log:
@@ -44,9 +51,12 @@ class Log:
 
     * Direct attribute access:
       ``lf.emg``, ``lf.ekg``, ``lf.acc``, ``lf.gyro``, ``lf.fsr``, ``lf.analog``,
-      ``lf.vo2master``, ``lf.hrstrap`` — each returns a list of bundles. Side
-      accessors ``lf.left`` / ``lf.right`` / ``lf.center`` return lists of
-      ``Sensor``.
+      ``lf.vo2master``, ``lf.hrstrap`` — each returns a single aggregated
+      :class:`pysampled.Data` per modality (channels stacked across all
+      sensors that have that modality), or ``None`` if no sensor does.
+      Use ``bundle.split_by_signal_name()`` to recover the per-Sensor list.
+      Side accessors ``lf.left`` / ``lf.right`` / ``lf.center`` return
+      lists of ``Sensor``.
     * The ``find()`` method for filtered queries.
     * ``__getitem__`` for legacy lookups by sensor number, side, modality,
       location, or sensor name (kept for backward compatibility; new code
@@ -96,7 +106,7 @@ class Log:
             import delsys
 
             lf = delsys.Log("trial_01.csv")
-            for emg in lf.emg:
+            for emg in lf.emg.split_by_signal_name():
                 processed = emg.process(amp_kind="envelope2")
             right_sensors = lf.find(side="R")
             forearm_emg = lf.find(modality="EMG", location="Forearm")
@@ -374,14 +384,47 @@ class Log:
     # is added — existing pickled Logs gain these accessors automatically.
     # ------------------------------------------------------------------
 
-    emg: List = property(lambda self: [s.emg for s in self.sensors if hasattr(s, "emg")])  # type: ignore[assignment]
-    ekg: List = property(lambda self: [s.ekg for s in self.sensors if hasattr(s, "ekg")])  # type: ignore[assignment]
-    acc: List = property(lambda self: [s.acc for s in self.sensors if hasattr(s, "acc")])  # type: ignore[assignment]
-    gyro: List = property(lambda self: [s.gyro for s in self.sensors if hasattr(s, "gyro")])  # type: ignore[assignment]
-    fsr: List = property(lambda self: [s.fsr for s in self.sensors if hasattr(s, "fsr")])  # type: ignore[assignment]
-    analog: List = property(lambda self: [s.analog for s in self.sensors if hasattr(s, "analog")])  # type: ignore[assignment]
-    vo2master: List = property(lambda self: [s.vo2master for s in self.sensors if hasattr(s, "vo2master")])  # type: ignore[assignment]
-    hrstrap: List = property(lambda self: [s.hrstrap for s in self.sensors if hasattr(s, "hrstrap")])  # type: ignore[assignment]
+    emg: Optional[EMG] = property(  # type: ignore[assignment]
+        lambda self: _aggregate_bundles(
+            [s.emg for s in self.sensors if hasattr(s, "emg")], EMG
+        )
+    )
+    ekg: Optional[EKG] = property(  # type: ignore[assignment]
+        lambda self: _aggregate_bundles(
+            [s.ekg for s in self.sensors if hasattr(s, "ekg")], EKG
+        )
+    )
+    acc: Optional[IMU] = property(  # type: ignore[assignment]
+        lambda self: _aggregate_bundles(
+            [s.acc for s in self.sensors if hasattr(s, "acc")], IMU
+        )
+    )
+    gyro: Optional[IMU] = property(  # type: ignore[assignment]
+        lambda self: _aggregate_bundles(
+            [s.gyro for s in self.sensors if hasattr(s, "gyro")], IMU
+        )
+    )
+    fsr: Optional[FSR] = property(  # type: ignore[assignment]
+        lambda self: _aggregate_bundles(
+            [s.fsr for s in self.sensors if hasattr(s, "fsr")], FSR
+        )
+    )
+    analog = property(
+        lambda self: _aggregate_bundles(
+            [s.analog for s in self.sensors if hasattr(s, "analog")]
+        )
+    )
+    vo2master: Optional[VO2Master] = property(  # type: ignore[assignment]
+        lambda self: _aggregate_bundles(
+            [s.vo2master for s in self.sensors if hasattr(s, "vo2master")],
+            VO2Master,
+        )
+    )
+    hrstrap = property(
+        lambda self: _aggregate_bundles(
+            [s.hrstrap for s in self.sensors if hasattr(s, "hrstrap")]
+        )
+    )
 
     left: List[Sensor] = property(lambda self: [s for s in self.sensors if s.lrc == "L"])  # type: ignore[assignment]
     right: List[Sensor] = property(lambda self: [s for s in self.sensors if s.lrc == "R"])  # type: ignore[assignment]

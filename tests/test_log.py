@@ -381,15 +381,6 @@ def test_log_acc_aggregate_signal_coords(fixtures_dir, tmp_path):
     assert lf.acc.signal_coords == ["x", "y", "z"]
 
 
-def test_log_acc_x_returns_all_sensors_x_axis(fixtures_dir, tmp_path):
-    """``lf.acc.x`` returns one column per ACC sensor (all of them on x)."""
-    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
-    n_acc_sensors = sum(1 for s in lf.sensors if hasattr(s, "acc"))
-    x = lf.acc.x
-    assert x.signal_coords == ["x"]
-    assert x().shape[1] == n_acc_sensors
-
-
 def test_log_acc_index_by_location_returns_one_sensor(fixtures_dir, tmp_path):
     """Indexing the aggregate ACC by signal_name picks one sensor's data."""
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)

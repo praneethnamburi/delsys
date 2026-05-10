@@ -191,3 +191,55 @@ def test_add_sensor_group_validates_membership(fixtures_dir, tmp_path):
 
     with pytest.raises(AssertionError):
         lf.add_sensor_group("bad", (99999,))
+
+
+# ---------------------------------------------------------------------------
+# 0.1.1: bundle metadata propagation through Log()
+# ---------------------------------------------------------------------------
+
+
+def test_log_acc_bundle_has_meaningful_signal_names(fixtures_dir, tmp_path):
+    """Loaded ACC bundles carry a non-default signal_name (one entry) and
+    the canonical x/y/z signal_coords."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    assert lf.acc, "emgworks fixture should have ACC bundles"
+    bundle = lf.acc[0]
+    assert bundle.signal_coords == ["x", "y", "z"]
+    assert len(bundle.signal_names) == 1
+    # No channelmap was supplied — fall back to ``ch<N>`` per the plan.
+    assert bundle.signal_names[0].startswith("ch")
+
+
+def test_log_acc_indexable_by_signal_name(fixtures_dir, tmp_path):
+    """ACC bundle supports pysampled label-based indexing via its signal_name."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    bundle = lf.acc[0]
+    name = bundle.signal_names[0]
+    sub = bundle[name]
+    assert sub().shape == bundle().shape
+
+
+def test_log_acc_magnitude_returns_global_l2(fixtures_dir, tmp_path):
+    """Post-0.1.1: acc.magnitude() collapses x/y/z to a single L2 column,
+    not three independent per-axis abs values."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    bundle = lf.acc[0]
+    mag = bundle.magnitude()
+    assert mag().ndim == 2
+    assert mag().shape[1] == 1
+    assert mag.signal_coords == ["mag"]
+
+
+def test_log_emg_bundle_has_meaningful_signal_names(fixtures_dir, tmp_path):
+    """EMG bundle carries a non-default signal_name (one entry per channel)
+    and the modality coord ['emg']."""
+    lf = _load(fixtures_dir, "emgworks.csv", tmp_path)
+    assert lf.emg
+    bundle = lf.emg[0]
+    assert bundle.signal_coords == ["emg"]
+    # Single-channel EMGS gets one entry; multi-channel bundles get one per channel.
+    assert len(bundle.signal_names) == bundle.shape[1]
+    # Default 's0' / 's1' fallback would be a regression — make sure no entry
+    # starts with the bare ``'s'`` + digit pattern from pysampled defaults.
+    for name in bundle.signal_names:
+        assert not (name.startswith("s") and name[1:].isdigit())

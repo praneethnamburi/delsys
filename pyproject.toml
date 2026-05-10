@@ -28,7 +28,7 @@ dependencies = [
     "scikit-learn",
     "heartpy",
     "neurokit2",
-    "pysampled>=1.1.1",
+    "pysampled>=1.2.0",
 ]
 
 [project.optional-dependencies]

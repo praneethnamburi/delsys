@@ -71,6 +71,12 @@ missing.
   constructions for these two modalities dropped the parent
   `SensorInfo`, contradicting the `lf.analog[i].sensor.location`
   contract documented elsewhere in the API.
+- **Dependency floor:** `pysampled` is now pinned to `>=1.2.0` (was
+  `>=1.1.1`). The whole point of 0.1.1 is to make per-`signal_name`
+  `magnitude()` (a 1.2.0 change) produce the right answer for
+  Delsys data; tests assert `mag.signal_coords == ['mag']` which
+  is also a 1.2.0 standardization. Older pysampled versions are no
+  longer supported.
 
 ### Provenance
 

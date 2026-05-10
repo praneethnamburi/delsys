@@ -1,18 +1,22 @@
 """Tests for ``delsys._util`` — modality dispatch and label-helper helpers."""
 
+import warnings
+
 import numpy as np
+import pysampled
 import pytest
 
 from delsys._metadata import SensorInfo
 from delsys._util import (
     _DRIFT_TOLERANCE,
+    _aggregate_bundles,
     _canonical_label,
     _mod_to_attr,
     _normalize_signal_lengths,
     _parse_fsr_quattro_positions,
     _trim_location,
 )
-from delsys.signals import Signal
+from delsys.signals import FSR, IMU, Signal
 
 
 def _make_signal(
@@ -248,3 +252,185 @@ def test_normalize_lengths_preserves_meta_and_history():
     assert out[0].meta["subchannel"] == "A"
     assert out[0].sensor.number == 1
     assert ("custom-step", {"k": "v"}) in out[0]._history
+
+
+# ---------------------------------------------------------------------------
+# _aggregate_bundles — stack per-Sensor bundles into a single aggregate
+# along the signal axis (Log.<modality> view).
+# ---------------------------------------------------------------------------
+
+
+def _make_imu_bundle(
+    *,
+    name: str,
+    sensor_number: int,
+    sr: float = 120.0,
+    n_samples: int = 100,
+    t0: float = 0.0,
+) -> IMU:
+    sensor_info = SensorInfo(
+        name=name,
+        modalities={"ACC"},
+        number=sensor_number,
+        type_sensorlog=None,
+        lrc=None,
+        location=name,
+    )
+    sig = np.arange(n_samples * 3, dtype=float).reshape(n_samples, 3)
+    return IMU(
+        sig,
+        sr,
+        axis=0,
+        t0=t0,
+        meta={"sensor": sensor_info},
+        signal_names=[name],
+        signal_coords=["x", "y", "z"],
+    )
+
+
+def _make_fsr_bundle(
+    *,
+    location: str,
+    sensor_number: int,
+    sr: float = 120.0,
+    n_samples: int = 100,
+    t0: float = 0.0,
+) -> FSR:
+    sensor_info = SensorInfo(
+        name=f"FSR-{sensor_number}",
+        modalities={"FSR"},
+        number=sensor_number,
+        type_sensorlog="FSR",
+        lrc=None,
+        location=location,
+    )
+    sig = np.arange(n_samples * 4, dtype=float).reshape(n_samples, 4)
+    return FSR(
+        sig,
+        sr,
+        axis=0,
+        t0=t0,
+        meta={"sensor": sensor_info},
+        signal_names=[f"{location}_{k}" for k in ("A", "B", "C", "D")],
+        signal_coords=["fsr"],
+    )
+
+
+def test_aggregate_bundles_empty_returns_none():
+    assert _aggregate_bundles([], IMU) is None
+
+
+def test_aggregate_bundles_single_part_preserves_shape():
+    part = _make_imu_bundle(name="L", sensor_number=1)
+    out = _aggregate_bundles([part], IMU)
+    assert isinstance(out, IMU)
+    assert out().shape == part().shape
+    assert out.signal_names == ["L"]
+    assert out.signal_coords == ["x", "y", "z"]
+    # Aggregate-side meta convention: ``sensors`` (plural), aligned with
+    # signal_names.
+    assert "sensors" in out.meta
+    assert len(out.meta["sensors"]) == len(out.signal_names) == 1
+    assert out.meta["sensors"][0].number == 1
+
+
+def test_aggregate_bundles_two_imus_stacks_name_major():
+    left = _make_imu_bundle(name="L", sensor_number=1)
+    right = _make_imu_bundle(name="R", sensor_number=2)
+    # Make right's data distinguishable.
+    right._sig = right._sig + 1000.0
+    out = _aggregate_bundles([left, right], IMU)
+    assert isinstance(out, IMU)
+    assert out().shape == (100, 6)
+    assert out.signal_names == ["L", "R"]
+    assert out.signal_coords == ["x", "y", "z"]
+    # Columns 0-2 are L, columns 3-5 are R (name-major layout).
+    np.testing.assert_array_equal(out()[:, :3], left())
+    np.testing.assert_array_equal(out()[:, 3:], right())
+
+
+def test_aggregate_bundles_two_fsrs_stacks_4n_names():
+    a = _make_fsr_bundle(location="LFoot", sensor_number=1)
+    b = _make_fsr_bundle(location="RFoot", sensor_number=2)
+    out = _aggregate_bundles([a, b], FSR)
+    assert isinstance(out, FSR)
+    assert out().shape == (100, 8)
+    assert len(out.signal_names) == 8
+    assert out.signal_coords == ["fsr"]
+
+
+def test_aggregate_bundles_meta_sensors_aligned_with_names():
+    a = _make_fsr_bundle(location="LFoot", sensor_number=1)
+    b = _make_fsr_bundle(location="RFoot", sensor_number=2)
+    out = _aggregate_bundles([a, b], FSR)
+    assert len(out.meta["sensors"]) == len(out.signal_names) == 8
+    # First 4 entries trace back to sensor 1, next 4 to sensor 2.
+    assert {s.number for s in out.meta["sensors"][:4]} == {1}
+    assert {s.number for s in out.meta["sensors"][4:]} == {2}
+
+
+def test_aggregate_bundles_signal_coord_mismatch_raises():
+    a = _make_imu_bundle(name="L", sensor_number=1)
+    b = _make_imu_bundle(name="R", sensor_number=2)
+    b.signal_coords = ["a", "b", "c"]
+    with pytest.raises(ValueError):
+        _aggregate_bundles([a, b], IMU)
+
+
+def test_aggregate_bundles_t0_mismatch_raises():
+    a = _make_imu_bundle(name="L", sensor_number=1, t0=0.0)
+    b = _make_imu_bundle(name="R", sensor_number=2, t0=10.0)
+    with pytest.raises(ValueError):
+        _aggregate_bundles([a, b], IMU)
+
+
+def test_aggregate_bundles_multi_rate_resamples_to_lowest_with_warning():
+    a = _make_imu_bundle(name="L", sensor_number=1, sr=120.0, n_samples=240)
+    b = _make_imu_bundle(name="R", sensor_number=2, sr=240.0, n_samples=480)
+    with pytest.warns(UserWarning, match="Multi-rate"):
+        out = _aggregate_bundles([a, b], IMU)
+    assert out.sr == 120.0
+    # Both per-Sensor parts should now have the same length on the
+    # aggregate's column axis.
+    assert out().shape[0] == a().shape[0]
+    assert out.signal_names == ["L", "R"]
+
+
+def test_aggregate_bundles_single_rate_no_warning():
+    a = _make_imu_bundle(name="L", sensor_number=1, sr=120.0)
+    b = _make_imu_bundle(name="R", sensor_number=2, sr=120.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # promote any warning to an error
+        out = _aggregate_bundles([a, b], IMU)
+    assert out.sr == 120.0
+
+
+def test_aggregate_bundles_default_class_inferred_from_parts():
+    # ``bundle_cls=None`` → class is taken from type(parts[0]).
+    a = _make_imu_bundle(name="L", sensor_number=1)
+    b = _make_imu_bundle(name="R", sensor_number=2)
+    out = _aggregate_bundles([a, b])
+    assert isinstance(out, IMU)
+
+
+def test_aggregate_bundles_plain_data_input():
+    a = pysampled.Data(
+        np.arange(100, dtype=float).reshape(100, 1),
+        sr=120.0,
+        axis=0,
+        signal_names=["A"],
+        signal_coords=["analog"],
+        meta={"sensor": SensorInfo("S1", {"Analog"}, 1, "Analog", None, None)},
+    )
+    b = pysampled.Data(
+        np.arange(100, dtype=float).reshape(100, 1) + 10,
+        sr=120.0,
+        axis=0,
+        signal_names=["B"],
+        signal_coords=["analog"],
+        meta={"sensor": SensorInfo("S2", {"Analog"}, 2, "Analog", None, None)},
+    )
+    out = _aggregate_bundles([a, b])
+    assert isinstance(out, pysampled.Data)
+    assert out.signal_names == ["A", "B"]
+    assert out.signal_coords == ["analog"]

@@ -25,7 +25,8 @@ Constants:
     TARGET_SR: Default per-modality target sampling rate.
     SUBCHANNEL_MAP: Canonical sub-channel ordering per modality.
     APPLICATIONS: Recognized acquisition applications.
-    VO2_SENSOR_NUM, HR_SENSOR_NUM: Synthetic sensor numbers for link devices.
+    LINK_DEVICE_REGISTRY: Sensor-name substring → (modality, synthetic
+        sensor number) for link devices (VO2 Master, HR Strap).
 
 Example:
     .. code-block:: python
@@ -40,10 +41,9 @@ Example:
 
 from delsys._constants import (
     APPLICATIONS,
-    HR_SENSOR_NUM,
+    LINK_DEVICE_REGISTRY,
     SUBCHANNEL_MAP,
     TARGET_SR,
-    VO2_SENSOR_NUM,
 )
 from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
 from delsys.ekg import EKG
@@ -52,7 +52,7 @@ from delsys.log import Log
 from delsys.sensor import Sensor
 from delsys.signals import FSR, IMU, Signal, VO2Master
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     # primary entry point
@@ -73,6 +73,5 @@ __all__ = [
     "TARGET_SR",
     "SUBCHANNEL_MAP",
     "APPLICATIONS",
-    "VO2_SENSOR_NUM",
-    "HR_SENSOR_NUM",
+    "LINK_DEVICE_REGISTRY",
 ]

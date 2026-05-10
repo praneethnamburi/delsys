@@ -8,12 +8,12 @@ modality bundle (``EMG``, ``EKG``, ``IMU``, ``FSR``, ``VO2Master``,
 ``Analog``, or ``HRStrap``) for each.
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
 import pysampled
 
-from delsys._constants import SUBCHANNEL_MAP
+from delsys._constants import LINK_DEVICE_REGISTRY, SUBCHANNEL_MAP
 from delsys._metadata import SensorInfo
 from delsys._util import _mod_to_attr, _parse_fsr_quattro_positions, _trim_location
 from delsys.ekg import EKG
@@ -39,6 +39,25 @@ _VO2_SIGNAL_NAMES: Tuple[str, ...] = (
 #: channel, EMGD/EMGQ/FSR fallbacks). Beyond the four letters, callers fall
 #: back to numeric suffixes.
 _LETTER_KEYS: Tuple[str, ...] = ("A", "B", "C", "D")
+
+#: Modality tag → bundle class. Drives the dispatch in :class:`Sensor`'s
+#: constructor: each parsed modality is wrapped in the corresponding
+#: :class:`pysampled.Data` subclass (or plain :class:`pysampled.Data` for
+#: ``Analog`` and ``HR``, which don't have a sensor-aware bundle class).
+#: Adding a new modality is a one-line edit here plus a
+#: :data:`delsys._constants.SUBCHANNEL_MAP` entry.
+MODALITY_REGISTRY: Dict[str, Type[pysampled.Data]] = {
+    "EMGS": EMG,
+    "EMGD": EMG,
+    "EMGQ": EMG,
+    "EKG": EKG,
+    "ACC": IMU,
+    "GYRO": IMU,
+    "FSR": FSR,
+    "Analog": pysampled.Data,
+    "VO2": VO2Master,
+    "HR": pysampled.Data,
+}
 
 
 class Sensor:
@@ -136,26 +155,8 @@ class Sensor:
                 signal_coords=signal_coords,
             )
 
-            if mod in ("ACC", "GYRO"):
-                setattr(self, _mod_to_attr(mod), IMU(sig, **bundle_kwargs))
-            elif mod == "FSR":
-                self.fsr = FSR(sig, **bundle_kwargs)
-            elif mod == "EKG":
-                self.ekg = EKG(sig, **bundle_kwargs)
-            elif mod == "Analog":
-                # Analog stays as a plain pysampled.Data for backward compatibility;
-                # users wanting metadata can find it on the parent Sensor or via
-                # ``lf.find(modality='Analog', as_='sensor')``. ``meta`` now
-                # carries the parent SensorInfo (was previously dropped).
-                self.analog = pysampled.Data(sig, **bundle_kwargs)
-            elif mod == "VO2":
-                self.vo2master = VO2Master(sig, **bundle_kwargs)
-            elif mod == "HR":
-                # HR Strap is also a plain pysampled.Data; same meta fix as Analog.
-                self.hrstrap = pysampled.Data(sig, **bundle_kwargs)
-            else:
-                assert mod.startswith("EMG")
-                self.emg = EMG(sig, **bundle_kwargs)
+            cls = MODALITY_REGISTRY[mod]
+            setattr(self, _mod_to_attr(mod), cls(sig, **bundle_kwargs))
 
     def __setstate__(self, state: dict) -> None:
         """Auto-relabel bundles on unpickle.
@@ -283,6 +284,20 @@ class Sensor:
             f"{loc}_{_LETTER_KEYS[i]}" if i < len(_LETTER_KEYS) else f"{loc}_{i}"
             for i in range(n_channels)
         ], ["value"]
+
+    @property
+    def is_link(self) -> bool:
+        """``True`` if this sensor is a Delsys link device.
+
+        A link device is any sensor whose modality appears in
+        :data:`delsys._constants.LINK_DEVICE_REGISTRY` — currently the
+        VO2 Master and HR Strap. Use this in preference to comparing
+        ``Sensor.number`` against magic constants: the underlying
+        synthetic numbers are an internal detail of how the parser
+        labels link channels, not a stable identifier.
+        """
+        link_modalities = {mod for mod, _ in LINK_DEVICE_REGISTRY.values()}
+        return bool(self.modalities & link_modalities)
 
     def get_signal(self) -> Optional[Union[EMG, EKG, pysampled.Data, FSR, VO2Master]]:
         """Return the first non-IMU bundle attached to this sensor.

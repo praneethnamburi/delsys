@@ -22,7 +22,7 @@ import pysampled
 from scipy.interpolate import interp1d
 from scipy.signal import resample
 
-from delsys._constants import APPLICATIONS, HR_SENSOR_NUM, VO2_SENSOR_NUM
+from delsys._constants import APPLICATIONS, LINK_DEVICE_REGISTRY
 from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
 from delsys.signals import Signal
 
@@ -72,9 +72,9 @@ def _parse_sig_name(
         Namedtuple with ``sensor_name``, ``modality``, ``sensor_number``,
         ``subchannel``. ``modality`` is normalized: EMG single/duo/quattro
         become ``'EMGS'`` / ``'EMGD'`` / ``'EMGQ'``; FSR analog channels
-        get reclassified to ``'FSR'``; VO2 Master and HR Strap link devices
-        get the synthetic sensor numbers :data:`VO2_SENSOR_NUM` /
-        :data:`HR_SENSOR_NUM`.
+        get reclassified to ``'FSR'``; link devices listed in
+        :data:`LINK_DEVICE_REGISTRY` (VO2 Master, HR Strap) get their
+        synthetic ``(modality, sensor_number)`` from the registry.
 
     Raises:
         AssertionError: If ``application`` is not in :data:`APPLICATIONS`.
@@ -140,16 +140,15 @@ def _parse_sig_name_discover(ss_name: str) -> Tuple[str, str, int, str]:
     if "FSR" in sensor_name and modality == "Analog":
         modality = "FSR"
 
-    # Branching on link-device vs. base-Trigno is exclusive; the previous
-    # version used two `if`s in an `else` clause which could double-trigger.
-    if "VO2 Master" in sensor_name:
-        sensor_number = VO2_SENSOR_NUM
-        subchannel = modality + subchannel
-        modality = "VO2"
-    elif "HR Strap" in sensor_name:
-        sensor_number = HR_SENSOR_NUM
-        subchannel = modality + subchannel
-        modality = "HR"
+    # Link-device dispatch is registry-driven; first substring match wins.
+    # Falls through to the Trigno-Base sensor-number parse only when no
+    # link device matches.
+    for substr, (link_mod, link_num) in LINK_DEVICE_REGISTRY.items():
+        if substr in sensor_name:
+            sensor_number = link_num
+            subchannel = modality + subchannel
+            modality = link_mod
+            break
     else:
         try:
             sensor_number = int(sensor_name.split(" ")[1])

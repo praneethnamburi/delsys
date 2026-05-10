@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-10
+
+Bundled cleanups: deprecates the legacy `Log.__getitem__` lookup,
+introduces a registry-driven dispatch for both modality bundles
+(internal) and link devices, and removes two public constants whose
+sentinel-int identity was never the right abstraction.
+
+The breaking piece is the constant removal — small enough that the
+maintainer confirmed no caller depends on the old names. The originally
+0.3.0-targeted `clean_emg_ekg_artifact` port and the
+`_aggregate_bundles` → `pysampled.merge_along_signal_name` migration
+shift to a later release.
+
+### Removed (BREAKING)
+
+- `delsys.VO2_SENSOR_NUM` and `delsys.HR_SENSOR_NUM` are no longer
+  exported from the top-level package (or from `delsys._constants`).
+  The sentinel values (`900` / `901`) survive as the integers stored
+  in `delsys.LINK_DEVICE_REGISTRY` so existing pickles still resolve.
+
+  **Migration:**
+
+  | Before (0.2.x)                       | After (0.3.0)                                            |
+  |--------------------------------------|----------------------------------------------------------|
+  | `s.number == delsys.VO2_SENSOR_NUM`  | `s.is_link` (any link device) or `"VO2" in s.modalities` |
+  | `delsys.HR_SENSOR_NUM`               | `delsys.LINK_DEVICE_REGISTRY["HR Strap"][1]`             |
+
+### Deprecated
+
+- `Log.__getitem__` — docstring-only deprecation (no runtime warning).
+  `Log.find(...)` is the public-facing replacement; it takes named
+  filters and always returns a list, instead of overloading five key
+  types and collapsing single-match results. The legacy method is
+  retained indefinitely for backward compatibility — there is no
+  removal plan.
+
+### Added
+
+- `Sensor.is_link` — boolean property identifying link devices (VO2
+  Master / HR Strap, plus any future entry in
+  `LINK_DEVICE_REGISTRY`). Use this in preference to comparing
+  `sensor.number` against magic ints.
+- `LINK_DEVICE_REGISTRY` (in `delsys._constants`, re-exported from the
+  top-level package) — `{sensor_name_substring: (modality, sensor_number)}`
+  driving link-device detection in `_parse_sig_name_discover`. Adding a
+  new link device is now a registry edit + corresponding
+  `SUBCHANNEL_MAP` / `TARGET_SR` / `MODALITY_REGISTRY` entries — no new
+  branches in the parser.
+
+### Fixed
+
+- `EMG.get_features` no longer trips pysampled's label/data validation.
+  The previous implementation computed its time vector by feeding a
+  `lambda x, ax: x.squeeze()` callable into `apply_running_win`, whose
+  output collapsed the channel axis and ended up with `n_signals !=
+  len(signal_names) * len(signal_coords)`. The time vector now comes
+  directly from `make_running_win.center_idx` applied to the source
+  signal's time grid, which sidesteps the round trip entirely.
+
+### Internal
+
+- `MODALITY_REGISTRY` in `delsys.sensor` replaces the if/elif modality
+  dispatch in `Sensor.__init__`. New modalities (e.g. the
+  `SmO2`/`Thb` keys already in `TARGET_SR`) become a one-line
+  registry edit. Behavior is unchanged for every modality the parser
+  currently emits.
+- `_parse_sig_name_discover` link-device branch now iterates
+  `LINK_DEVICE_REGISTRY` instead of hard-coding `"VO2 Master"` /
+  `"HR Strap"` substring checks.
+- `Log.export_to_csv` switched from `self[modality]` to
+  `self.find(modality=modality, as_="modality")` so the only remaining
+  `__getitem__` callers are external.
+
 ## [0.2.0] - 2026-05-10
 
 Breaking change to the typed `Log.<modality>` accessors plus a

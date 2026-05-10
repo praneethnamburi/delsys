@@ -4,9 +4,11 @@ pickle round-trip)."""
 
 import pickle
 import shutil
+import warnings
 
 import pytest
 
+import delsys
 from delsys import EKG, EMG, FSR, IMU, Log, VO2Master
 
 # ---------------------------------------------------------------------------
@@ -425,3 +427,79 @@ def test_log_aggregate_magnitude_per_sensor(fixtures_dir, tmp_path):
     mag = lf.acc.magnitude()
     assert mag.signal_coords == ["mag"]
     assert mag().shape[1] == n_acc_sensors
+
+
+# ---------------------------------------------------------------------------
+# 0.3.0: Sensor.is_link, LINK_DEVICE_REGISTRY, __getitem__ docstring-only
+# deprecation, export_to_csv migration
+# ---------------------------------------------------------------------------
+
+
+def test_is_link_true_for_vo2_and_hr_sensors(fixtures_dir, tmp_path):
+    lf = _load(fixtures_dir, "discover164_link.csv", tmp_path)
+    link_sensors = [s for s in lf.sensors if s.is_link]
+    assert link_sensors, "expected at least one link-device sensor in the link fixture"
+    link_modalities = set().union(*(s.modalities for s in link_sensors))
+    assert link_modalities & {"VO2", "HR"}
+
+
+def test_is_link_false_for_trigno_base_sensors(fixtures_dir, tmp_path):
+    """Pure Trigno-Base fixtures (no link devices) must report is_link=False
+    on every sensor."""
+    lf = _load(fixtures_dir, "discover164_basic.csv", tmp_path)
+    assert not any(s.is_link for s in lf.sensors)
+
+
+def test_link_device_registry_exported_and_drives_parser(fixtures_dir, tmp_path):
+    """The registry's synthetic sensor numbers must show up on the parsed
+    Log when the fixture contains link devices — guarantees that the
+    parser picks up the registry rather than the old hard-coded constants."""
+    assert "VO2 Master" in delsys.LINK_DEVICE_REGISTRY
+    assert "HR Strap" in delsys.LINK_DEVICE_REGISTRY
+    vo2_num = delsys.LINK_DEVICE_REGISTRY["VO2 Master"][1]
+    hr_num = delsys.LINK_DEVICE_REGISTRY["HR Strap"][1]
+
+    lf = _load(fixtures_dir, "discover164_link.csv", tmp_path)
+    nums = set(lf.sensor_numbers)
+    assert vo2_num in nums
+    assert hr_num in nums
+
+
+def test_legacy_sensor_num_constants_removed():
+    """0.3.0 removes the public VO2_SENSOR_NUM / HR_SENSOR_NUM exports."""
+    assert not hasattr(delsys, "VO2_SENSOR_NUM")
+    assert not hasattr(delsys, "HR_SENSOR_NUM")
+
+
+def test_getitem_emits_no_runtime_warning(fixtures_dir, tmp_path):
+    """0.3.0 deprecates ``Log.__getitem__`` via docstring only — no
+    DeprecationWarning fires at call time."""
+    lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        warnings.simplefilter("error", PendingDeprecationWarning)
+        # Exercise the multiple key types __getitem__ accepts.
+        _ = lf[lf.sensor_numbers[0]]
+        _ = lf["EMG"]
+        if any(s.lrc == "L" for s in lf.sensors):
+            _ = lf["L"]
+
+
+def test_getitem_shape_unchanged(fixtures_dir, tmp_path):
+    """Behavior parity: bracket lookup keeps the 0.2.x return shapes
+    (deprecation is docs-only)."""
+    lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
+    by_num = lf[lf.sensor_numbers[0]]
+    assert by_num.number == lf.sensor_numbers[0]
+
+
+def test_export_to_csv_uses_find_migration(fixtures_dir, tmp_path):
+    """``export_to_csv`` switched from ``self[modality]`` to ``self.find()``
+    in 0.3.0 — make sure it still produces a CSV file with the expected
+    naming."""
+    lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
+    export_dir = tmp_path / "export"
+    lf.export_to_csv(modality="emg", export_dir=str(export_dir))
+    out = export_dir / f"{lf.name}_emg.csv"
+    assert out.exists()
+    assert out.stat().st_size > 0

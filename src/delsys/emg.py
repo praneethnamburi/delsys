@@ -368,8 +368,13 @@ class EMG(pysampled.Data):
         else:
             raise ValueError
 
+        # Time vector at window centers, sampled from proc_sig's own time
+        # grid. Going through ``apply_running_win`` here would force a
+        # squeeze callable whose output shape collapses the channel axis,
+        # which then fails pysampled's label/data validation.
+        rw = proc_sig.make_running_win(win_size, win_inc)
         features: Dict[str, Any] = {
-            "time": proc_sig.apply_running_win(lambda x, ax: x.squeeze(), win_size, win_inc).t,
+            "time": proc_sig.t[np.array(rw.center_idx)],
         }
         for name, func in funcs.items():
             features[name] = proc_sig.apply_running_win(func, win_size, win_inc)().flatten()

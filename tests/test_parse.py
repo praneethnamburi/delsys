@@ -2,7 +2,7 @@
 
 import pytest
 
-from delsys._constants import HR_SENSOR_NUM, VO2_SENSOR_NUM
+from delsys._constants import LINK_DEVICE_REGISTRY
 from delsys._parse import (
     _detect_parser,
     _fix_corrupted_sensor_names,
@@ -116,7 +116,7 @@ def test_parse_sig_name_vo2_link_uses_synthetic_sensor_number(trigno_target_sr):
         trigno_target_sr,
     )
     assert info.modality == "VO2"
-    assert info.sensor_number == VO2_SENSOR_NUM
+    assert info.sensor_number == LINK_DEVICE_REGISTRY["VO2 Master"][1]
 
 
 def test_parse_sig_name_hr_link_uses_synthetic_sensor_number(trigno_target_sr):
@@ -126,7 +126,7 @@ def test_parse_sig_name_hr_link_uses_synthetic_sensor_number(trigno_target_sr):
         trigno_target_sr,
     )
     assert info.modality == "HR"
-    assert info.sensor_number == HR_SENSOR_NUM
+    assert info.sensor_number == LINK_DEVICE_REGISTRY["HR Strap"][1]
 
 
 def test_parse_sig_name_emg_quattro_tag(trigno_target_sr):

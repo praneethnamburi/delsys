@@ -72,8 +72,20 @@ _SUBCHANNEL_KEYS: Dict[str, Tuple[str, ...]] = {
 #: which per-format reader runs.
 APPLICATIONS: Tuple[str, ...] = ("EMGworks", "Trigno Discover")
 
-#: Placeholder sensor numbers for Delsys link devices (VO2 Master, HR Strap).
-#: Chosen to sit far from Trigno-Base sensor numbers (typically 1–16) so
-#: ``sensor_number`` lookups remain unambiguous.
-VO2_SENSOR_NUM: int = 900
-HR_SENSOR_NUM: int = 901
+#: Link-device identification. Maps a substring of the column-header
+#: ``sensor_name`` to ``(modality, synthetic_sensor_number)``. The
+#: per-format parser walks this dict in registration order; first
+#: substring match wins. The synthetic numbers sit far from Trigno-Base
+#: sensor numbers (typically 1–16) so ``sensor_number`` lookups remain
+#: unambiguous.
+#:
+#: Adding a new link device requires:
+#:
+#: 1. one entry here,
+#: 2. a :data:`SUBCHANNEL_MAP` entry for its modality,
+#: 3. a :data:`TARGET_SR` entry,
+#: 4. a ``MODALITY_REGISTRY`` entry in :mod:`delsys.sensor`.
+LINK_DEVICE_REGISTRY: Dict[str, Tuple[str, int]] = {
+    "VO2 Master": ("VO2", 900),
+    "HR Strap": ("HR", 901),
+}

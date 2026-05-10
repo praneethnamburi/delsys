@@ -59,8 +59,9 @@ class Log:
       lists of ``Sensor``.
     * The ``find()`` method for filtered queries.
     * ``__getitem__`` for legacy lookups by sensor number, side, modality,
-      location, or sensor name (kept for backward compatibility; new code
-      should prefer ``find``).
+      location, or sensor name. **Deprecated as of 0.3.0** — retained
+      indefinitely for backward compatibility, but new code should prefer
+      ``find``, which is more explicit about its return shape.
 
     Args:
         fname: Path to a CSV file exported from Delsys.
@@ -522,15 +523,23 @@ class Log:
         raise ValueError(f"Unknown as_={as_!r}; expected 'auto', 'modality', 'sensor', or 'signal'")
 
     # ------------------------------------------------------------------
-    # Legacy bracket lookup (kept for backward compatibility)
+    # Legacy bracket lookup (deprecated, retained indefinitely)
     # ------------------------------------------------------------------
 
     def __getitem__(self, key: Union[int, str, list]) -> Any:
         """Look up sensors or modality bundles by sensor number, side, modality, location, or name.
 
-        ``__getitem__`` is the legacy retrieval API. New code should prefer
-        :meth:`find`, which is more explicit. When ``key`` is a list, the
-        result is the OR of the per-key matches.
+        .. deprecated:: 0.3.0
+           Use :meth:`find` instead. ``__getitem__`` overloads five key
+           types (int sensor number, single-letter side, modality string,
+           location substring, sensor-name substring) and collapses
+           single-match results, which makes the return shape hard to
+           predict at the call site. ``find`` takes named filters and
+           always returns a list. The legacy method is retained
+           indefinitely for backward compatibility — there is no removal
+           plan — but new code should prefer ``find``.
+
+        When ``key`` is a list, the result is the OR of the per-key matches.
 
         Args:
             key: One of:
@@ -656,9 +665,7 @@ class Log:
         if export_dir is None:
             export_dir = os.path.join(Path(self.fname).parent, "export")
         os.makedirs(export_dir, exist_ok=True)
-        all_signals = self[modality]
-        if not isinstance(all_signals, list):
-            all_signals = [all_signals]
+        all_signals = self.find(modality=modality, as_="modality")
         assert len(set([x.sr for x in all_signals])) == 1
         emg_dict: Dict[str, Any] = {"Time": []}
         for sensor in self.sensors:

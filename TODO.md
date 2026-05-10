@@ -25,9 +25,9 @@ Follow-ups (deferred to 0.1.1+):
 
 - **`log.py` coverage push.** The legacy `__getitem__` and `export_to_csv`
   paths are public surface — a few targeted tests would close the biggest
-  branch-coverage gap. The legacy bracket lookup is a candidate for
-  deprecation, so test value depends on whether we plan to keep or remove
-  it.
+  branch-coverage gap. As of 0.3.0 `__getitem__` is docs-only deprecated
+  with no removal plan, so dedicated coverage of its branches is
+  worth-doing rather than throw-away work.
 - **`emg.py` / `ekg.py` NeuroKit-backed features.** `process_nk`,
   `get_features_nk`, `process_nk` (EKG), `get_features_hp` are uncovered.
   These wrap upstream libraries; tests would mostly verify the dict-shape
@@ -61,6 +61,21 @@ To regenerate this snapshot::
   `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
   `signal_names` / `signal_coords` convention with no caller changes.
 
+## Shipped in 0.3.0 (2026-05-10)
+
+- ✅ `Log.__getitem__` deprecated (docstring-only — no removal
+  planned). `Log.find(...)` is the public replacement.
+- ✅ `MODALITY_REGISTRY` in `sensor.py` replaces the if/elif modality
+  dispatch in `Sensor.__init__`.
+- ✅ `LINK_DEVICE_REGISTRY` in `_constants.py` consolidates link-device
+  detection in `_parse_sig_name_discover`.
+- ✅ `Sensor.is_link` property added.
+- ✅ **BREAKING:** `VO2_SENSOR_NUM` / `HR_SENSOR_NUM` removed from
+  public exports. Synthetic numbers survive inside
+  `LINK_DEVICE_REGISTRY` so existing pickles still resolve.
+- ✅ `Log.export_to_csv` migrated from `self[modality]` to
+  `self.find(modality=modality, as_="modality")`.
+
 ## Shipped in 0.2.0 (2026-05-10)
 
 - ✅ `Log.<modality>` accessors return a single aggregated bundle per
@@ -83,19 +98,12 @@ To regenerate this snapshot::
   `NotImplementedError` on multi-channel input (was silent
   column-major flatten).
 
-### Followups (target 0.2.1)
-
-- **`Log.__getitem__` deprecation.** Tiny but unrelated — defer.
-  `lf.find(...)` is the public-facing replacement.
-
-### Followups (target 0.3.0)
+### Followups (target 0.4.0)
 
 - **Port `clean_emg_ekg_artifact`** (was the original 0.2 headline,
   see "Post-0.1.0 roadmap" below). The aggregate accessor reshape
   simplifies the splice-back step (the cleaner now sees `lf.emg` as
   one bundle rather than a list).
-- **`MODALITY_REGISTRY` refactor** in `Sensor.__init__`. Touches
-  per-Sensor construction, which 0.2.0 left alone.
 - **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
   once pysampled ships those classmethods (deferred from pysampled
   1.2.0).
@@ -127,11 +135,9 @@ To regenerate this snapshot::
 
 ## Restructure / API
 
-- **`Sensor.__init__` modality dispatch.** It uses an if/elif chain on modality strings to choose which class to instantiate. A small `MODALITY_REGISTRY` mapping `{'EMG': EMG, 'EKG': EKG, ...}` would be cleaner and would make adding modalities (e.g. SmO2/Thb that already appear in `TARGET_SR`) one-line changes.
-
-- **`Log.__getitem__` overloading.** Mixes sensor-lookup and signal-lookup based on key type (int, single-letter, modality string, location, name). Works but is undiscoverable. The new `lf.find(...)` is the public-facing replacement; `__getitem__` could be deprecated when there's a transition window.
-
-- **VO2 / HR identity.** `VO2_SENSOR_NUM` and `HR_SENSOR_NUM` are placeholder integers chosen to not collide with Trigno-base sensor numbers. Brittle if Delsys ever ships a third link device. A real fix identifies link sensors by type rather than number — would also clean up the special-cased branches in `_parse_sig_name_discover` and `Sensor.__init__`.
+- **`Log.__getitem__` overloading.** Docstring-deprecated as of 0.3.0,
+  retained indefinitely. Removal is not planned — kept here for
+  visibility in case the call shape causes problems for new users.
 
 ## Pre-existing in-code TODOs
 

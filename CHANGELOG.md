@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-10
+
+### Fixed
+
+- `Log.modalities`, `Log.locations`, and `Log.modality_sensors` no
+  longer crash on `Log` objects loaded from very-old pickles where
+  per-:class:`Signal` ``meta`` is empty. All three now derive from
+  :attr:`Log.sensors` — repaired by :meth:`Sensor.__setstate__` — so
+  they resolve on the same pickles that the 0.4.0
+  `clean_emg_ekg_artifact()` fix already handled. As a side effect
+  `Log.locations` (previously raising `AttributeError` because
+  ``Signal`` has no ``.location`` property — broken on every load,
+  not just stale pickles) now returns the set of
+  ``sensor.location`` values, and `Log.modality_sensors` returns
+  ``{modality: {sensor.name, ...}}`` instead of the documentation-
+  contradicting ``{modality: {modality_as_attr_name}}`` it produced
+  before. No internal callers depended on the old behavior.
+
 ## [0.4.0] - 2026-05-10
 
 Headline feature: a `Log`-integrated EMG/EKG artifact cleaning

@@ -162,6 +162,29 @@ def test_pickle_relabels_legacy_default_labels(fixtures_dir, tmp_path):
         assert bundle.meta["sensor"].number == lf2.sensors[s_idx].number
 
 
+def test_aggregate_props_survive_empty_signal_meta(fixtures_dir, tmp_path):
+    """``lf.modalities`` / ``lf.locations`` / ``lf.modality_sensors`` resolve
+    on very-old pickles where every :class:`Signal` has ``meta == {}``.
+    The Sensor metadata is still intact (rebuilt by
+    :meth:`Sensor.__setstate__`), so these aggregates derive from there
+    rather than from :attr:`Log.signals`."""
+    lf = _load(fixtures_dir, "discover164_mvc.csv", tmp_path)
+    pre_modalities = lf.modalities
+    pre_locations = lf.locations
+
+    # Simulate the pre-0.1.1 pickle shape: per-Signal meta is empty.
+    for sig in lf.signals:
+        sig.meta = {}
+
+    # All three previously crashed with KeyError / AttributeError here.
+    assert lf.modalities == pre_modalities
+    assert lf.locations == pre_locations
+    ms = lf.modality_sensors
+    assert set(ms.keys()) == pre_modalities
+    for sensors_for_mod in ms.values():
+        assert sensors_for_mod <= lf.sensor_names
+
+
 def test_pickle_relabel_preserves_existing_meta_keys(fixtures_dir, tmp_path):
     """Relabel uses ``meta.setdefault('sensor', ...)`` so it must not stomp
     pre-existing meta keys (e.g. EKG's cached rpeak indices)."""

@@ -351,14 +351,19 @@ class Log:
     # Aggregate properties
     # ------------------------------------------------------------------
 
+    # Derived from ``self.sensors`` (not ``self.signals``) so very-old pickles
+    # with empty per-:class:`Signal` ``meta`` still resolve — the Sensor
+    # metadata is repaired by :meth:`Sensor.__setstate__`, the per-Signal
+    # meta is not. Same rationale as the 0.4.0 ``_normalize_signal_lengths``
+    # / ``_splice_emg_back`` fixes.
     modalities: Set[str] = property(  # type: ignore[assignment]
-        lambda self: set([x.modality for x in self.signals])
+        lambda self: {m for s in self.sensors for m in s.modalities}
     )
     sampling_rates: Set[float] = property(  # type: ignore[assignment]
         lambda self: set([x.sr for x in self.signals])
     )
     locations: Set[Optional[str]] = property(  # type: ignore[assignment]
-        lambda self: set([x.location for x in self.signals])
+        lambda self: {s.location for s in self.sensors}
     )
 
     sensor_names: Set[str] = property(  # type: ignore[assignment]
@@ -377,8 +382,9 @@ class Log:
     def modality_sensors(self) -> Dict[str, Set[str]]:
         """Map each modality to the set of sensor names that have it."""
         ret: Dict[str, Set[str]] = {}
-        for modality in self.modalities:
-            ret[modality] = set([x.sensor_name for x in self.signals if x.modality == modality])
+        for sensor in self.sensors:
+            for modality in sensor.modalities:
+                ret.setdefault(modality, set()).add(sensor.name)
         return ret
 
     @property

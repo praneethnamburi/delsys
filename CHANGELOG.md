@@ -219,6 +219,9 @@ shift to a later release.
 
 ## [0.2.0] - 2026-05-10
 
+> **Note:** 0.2.0 was tagged but not published — see [0.3.0](#030---2026-05-10).
+> The changes described below shipped to PyPI as part of 0.3.0.
+
 Breaking change to the typed `Log.<modality>` accessors plus a
 parse-time fix for same-rate sample-count drift. Bumped to **0.2.0**
 under the "breaking change → minor on 0.x" semver-on-0.x convention.

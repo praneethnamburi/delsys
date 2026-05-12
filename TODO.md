@@ -1,6 +1,8 @@
 # TODO
 
-Items deferred during the initial standalone-package extraction.
+Open design questions and deferred work for the next release cycle.
+Release narrative lives in `CHANGELOG.md`; portfolio-level roadmap
+lives in `C:/dev/pn-specs/ROADMAP.md`.
 
 ## Coverage snapshot (2026-05-09)
 
@@ -40,117 +42,7 @@ To regenerate this snapshot::
 (Source filter, branch tracking, and exclude rules live in
 `[tool.coverage.run]` / `[tool.coverage.report]` in `pyproject.toml`.)
 
-## Shipped in 0.4.0 (2026-05-10)
-
-- ✅ `Log.clean_emg_ekg_artifact(*, config, motion, in_place, generate_report, splice_source)` —
-  end-to-end EMG/EKG artifact cleaner ported from
-  `pn-projects/projects/emg_ica_cleaning.py`. By default mutates
-  `lf.signals` in place, rebuilds the affected `Sensor.emg`
-  bundles, and writes a multi-page PDF next to the source CSV;
-  pass `in_place=False` / `generate_report=False` to opt out.
-  `splice_source="ekgonly"` / `"motiononly"` swap which variant
-  gets spliced back when a stage is doing more harm than good.
-- ✅ `delsys.cleaning` module — building blocks for power users
-  (`fit_ica`, `score_components_against_ekg`,
-  `auto_select_ekg_components`, `reconstruct_without_components`,
-  `regress_out_ekg_from_emg`, `regress_out_motion_from_emg`,
-  `harmonize_multirate_inputs`, `run_pipeline`) plus
-  `CleaningConfig` / `CleaningResult` dataclasses.
-- ✅ `CleaningResult.cleaned_emg_ekgonly` / `cleaned_emg_motiononly`
-  stage-isolated variants, plus `feature_names` and `fname` so the
-  reporting helpers can label channels and default the output path.
-- ✅ `CleaningResult.generate_report(path=None)` — single multi-page
-  PDF (ranked summary on page 1, per-channel pages thereafter).
-- ✅ `CleaningResult.review(channels=None)` — interactive matplotlib
-  viewer with arrow-key channel cycling and `e` / `m` / `c` / `o`
-  overlay toggles. Three time-domain panels share both x and y axes.
-- ✅ `CleaningResult.review_components(components=None)` — 4-panel
-  viewer over ICA components (IC time course + top three input
-  contributors ranked by `|A[i, c]|`). Pairs with the new
-  `result.ica` / `result.ica_input_feature_names` fields, populated
-  whenever the ECG stage runs.
-- ✅ PDF gains a new ECG diagnostics page first (bar plot of per-IC
-  correlation against the EKG reference + components-removed text);
-  summary table grows a `motion dB` column isolating the motion
-  stage's contribution; per-channel pages share y-axes across the
-  three time-domain panels.
-- ✅ `tutorials/cleaning_emg_ekg_artifact.md` — end-to-end walkthrough,
-  extended with `review_components` + `splice_source` sections and a
-  pointer to the bundled reference report.
-- ✅ `scripts/make_tutorial_sample.py` + committed
-  `tutorials/data/taichi_trial5_6s.csv` and matching reference
-  PDF — 6 s slice of a real TaiChi recording (every sensor kept), big
-  enough for ICA to converge cleanly.
-- ✅ Defensive guards for very-old pickles: `_normalize_signal_lengths`
-  reads `meta.get("modality")` instead of the hard property; the
-  splice-back updates `sensor.emg` directly via `pysampled.Data._clone`
-  so cleaning lands on `lf.emg` even when per-Signal meta is empty.
-- ✅ Auto-report path is pre-flight-checked for write access — a locked
-  PDF raises a clear `PermissionError` before any work is done, rather
-  than mutating `lf.signals` and then failing on the PDF write.
-- ✅ NumPy 2.0 compatibility for the Welch-integral helper used by the
-  report's `ecg-band dB` column (switched from
-  `getattr(np, "trapezoid", np.trapz)` to `hasattr(np, "trapezoid")`).
-
-## Shipped in 0.3.0 (2026-05-10)
-
-- ✅ `Log.__getitem__` deprecated (docstring-only — no removal
-  planned). `Log.find(...)` is the public replacement.
-- ✅ `MODALITY_REGISTRY` in `sensor.py` replaces the if/elif modality
-  dispatch in `Sensor.__init__`.
-- ✅ `LINK_DEVICE_REGISTRY` in `_constants.py` consolidates link-device
-  detection in `_parse_sig_name_discover`.
-- ✅ `Sensor.is_link` property added.
-- ✅ **BREAKING:** `VO2_SENSOR_NUM` / `HR_SENSOR_NUM` removed from
-  public exports. Synthetic numbers survive inside
-  `LINK_DEVICE_REGISTRY` so existing pickles still resolve.
-- ✅ `Log.export_to_csv` migrated from `self[modality]` to
-  `self.find(modality=modality, as_="modality")`.
-
-## Shipped in 0.2.0 (2026-05-10)
-
-- ✅ `Log.<modality>` accessors return a single aggregated bundle per
-  modality (channels stacked across all sensors that have the
-  modality) instead of `List[Bundle]`. Migration via
-  `bundle.split_by_signal_name()`.
-- ✅ Same-rate sample-count drift normalized at parse time
-  (`_normalize_signal_lengths` in `_util.py`), so per-Sensor stacking
-  no longer trips on 1-sample drift between channels of one modality.
-- ✅ `_aggregate_bundles` helper for multi-Sensor stacking, with
-  lowest-SR resample + `UserWarning` for multi-rate input.
-- ✅ `bundle.sensors` (plural) property unifies per-Sensor and
-  aggregate views; `meta["sensors"]` convention aligned with
-  `signal_names` on aggregates.
-- ✅ `IMU.x/y/z` use coord-lookup so the same accessor works on
-  per-Sensor and aggregate shapes.
-- ✅ `FSR.a/b/c/d` guarded to the 4-channel per-Sensor view; aggregate
-  FSR raises with a hint pointing at `split_by_signal_name()`.
-- ✅ `EMG.process(amp_kind='nk')` and `EKG.find_rpeaks_pn` raise
-  `NotImplementedError` on multi-channel input (was silent
-  column-major flatten).
-
-## Shipped in 0.1.1 (2026-05-09)
-
-- ✅ Bundle metadata enrichment in `Sensor.__init__` — every modality
-  bundle now carries meaningful `signal_names` / `signal_coords` derived
-  from the channelmap or sensor number, replacing the
-  `["s0","s1",...]` / `["x"]` defaults that pysampled would otherwise
-  fall through to. Restores correct `acc.magnitude()` semantics under
-  pysampled ≥ 1.2.0.
-- ✅ FSR / Quattro position-aware naming via the channelmap
-  parenthetical (e.g. `LFoot (1-Heel, ...)` →
-  `["LFoot_Heel", "LFoot_OuterEdge", "LFoot_Ball", "LFoot_Toe"]`).
-- ✅ `chN` fallback for sensors without a channelmap entry.
-- ✅ `IMU.x/y/z`, `FSR.a..d`, `VO2Master.*` inherit parent labels rather
-  than hardcoding their own — a single-axis IMU keeps its sensor name.
-- ✅ `Analog` and `HRStrap` bundles now carry `meta=sensor_meta`
-  (previously dropped — minor pre-existing bug).
-- ✅ `Sensor.__setstate__` auto-relabels bundles on unpickle, so old
-  pickles produced before 0.1.1 (or by the legacy
-  `immersionToolbox/immersionlab/delsys.py` shim) come out with the new
-  `signal_names` / `signal_coords` convention with no caller changes.
-
-### Followups (target 0.5.0)
+## Followups (target 0.5.0)
 
 - **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
   once pysampled ships those classmethods (deferred from pysampled
@@ -165,7 +57,7 @@ To regenerate this snapshot::
   streaming workflow shows up. Offline-only was the deliberate v1
   scope.
 
-### Known limitations carrying forward
+## Known limitations carrying forward
 
 - **Per-`Signal` `meta` on very-old pickles is unrecoverable.** Pickles
   produced before sensor metadata moved into `pysampled.Data.meta`
@@ -202,17 +94,3 @@ To regenerate this snapshot::
 ## Domain / units
 
 - VO2Master `VO2_absolute` returns raw CSV values (~37000 for moderate exercise). Likely a units issue, not a column-mapping one — verify against a known-correct VO2 reading and add unit conversion if needed.
-
-## Stage 4 status (added 2026-05-08)
-
-All six features have docs + tests in `tests/`:
-
-1. ✅ CSV header parsing — `tests/test_parse.py` (22 tests).
-2. ✅ End-to-end `Log` loading — `tests/test_log.py` (20 tests, parametrized over all 7 fixtures).
-3. ✅ Signal classes — `tests/test_signals.py` (30 tests).
-4. ✅ `EMG.process` envelope pipeline — `tests/test_emg.py` (14 tests).
-5. ✅ `EKG` R-peak detection — `tests/test_ekg.py` (NeuroKit's `ecg_simulate`).
-6. ✅ ICA cleaning — `tests/test_ica.py` (using a `Log`-shaped mock).
-
-Fixtures live under `tests/fixtures/` and are generated from `_data/` via
-`scripts/make_fixture.py`.

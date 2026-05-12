@@ -50,3 +50,6 @@ RESUME.md
 
 # Maintainer-only release runbook
 PUBLISH.md
+
+# AI workflow context (auto-loaded by Claude Code; kept local to avoid exposing private repo refs)
+CLAUDE.md

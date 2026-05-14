@@ -1,6 +1,6 @@
 # Plan delsys 0.4.0 — Log.clean_emg_ekg_artifact
 
-You're starting a fresh session in `C:\dev\delsys`. The task this
+You're starting a fresh session in the delsys repo. The task this
 session is to **design** the EMG/EKG artifact cleaning feature for the
 next minor release (0.4.0). Do **not** implement code yet — produce a
 concrete plan we can execute in a follow-up session. Stay in plan mode
@@ -11,31 +11,32 @@ until the user is satisfied with the design.
 Read these in order. They give you the full state of the project — do
 not rely on what's in this prompt as the canonical version.
 
-1. `C:\dev\delsys\CLAUDE.md` — repo-local instructions, points at the
+1. `CLAUDE.md` (gitignored) — repo-local instructions, points at the
    spec and conventions.
-2. `C:\dev\pn-specs\specs\delsys.md` — product intent, audience, what
-   "success" looks like, the roadmap entry for 0.4 that you're now
-   filling in.
-3. `C:\dev\pn-specs\CONVENTIONS.md` — cross-cutting conventions
-   (docstring style, formatter, build backend) — assume they apply.
-4. `C:\dev\delsys\CHANGELOG.md` — release history; note 0.1.1, 0.2.0,
+2. The product spec (private, outside this repo) — product intent,
+   audience, what "success" looks like, the roadmap entry for 0.4
+   that you're now filling in.
+3. The portfolio conventions doc (private, outside this repo) —
+   cross-cutting conventions (docstring style, formatter, build
+   backend) — assume they apply.
+4. `CHANGELOG.md` — release history; note 0.1.1, 0.2.0,
    0.3.0 patterns for breaking-change framing and migration tables.
-5. `C:\dev\delsys\TODO.md` — deferred work, especially "Followups
+5. `TODO.md` — deferred work, especially "Followups
    (target 0.4.0)" and "Post-0.1.0 roadmap".
-6. `C:\dev\pn-projects\projects\emg_ica_cleaning.py` (961 lines) — the
-   source pipeline to port. Skim the `def `/`class ` index first, then
-   read in detail.
+6. `emg_ica_cleaning.py` (961 lines, lives outside this repo in the
+   project-analyses working space) — the source pipeline to port.
+   Skim the `def `/`class ` index first, then read in detail.
 
 ## Environment
 
-- Working dir: `C:\dev\delsys`. Git repo, default branch `main`.
+- Working dir: the delsys repo root. Git repo, default branch `main`.
 - Conda env name: **`b4`** — Python 3.10.13, has delsys 0.3.0
   installed editable. Run tests via
   `conda run -n b4 pytest -q` (Bash sees `conda` only via PowerShell;
   prefer the PowerShell tool for env-aware commands).
 - Platform: Windows; shell is PowerShell.
-- `pysampled` lives at `C:\dev\pysampled` and is imported from there
-  in dev. delsys depends on `pysampled>=1.2.0`.
+- `pysampled` is a sibling package, imported from a local checkout in
+  dev. delsys depends on `pysampled>=1.2.0`.
 
 ## What 0.4.0 needs to deliver
 
@@ -61,8 +62,8 @@ Pending non-headline work that may ride along (decide whether 0.4.0
 or punt):
 
 - Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`
-  once pysampled ships those classmethods. (Check pysampled's TODO at
-  `C:\dev\pysampled\TODO.md` to see whether 1.3.0 is close.)
+  once pysampled ships those classmethods. (Check pysampled's TODO to
+  see whether 1.3.0 is close.)
 
 ## Design questions you must resolve in the plan
 
@@ -116,8 +117,8 @@ Don't punt these. Answer each with a recommendation + the trade-off:
 
 ## Output
 
-Write the plan to
-`C:\Users\praneeth\.claude\plans\<descriptive-name>.md`. Structure:
+Write the plan to a local plans directory (out of this repo).
+Structure:
 
 - **Context** — why this is happening (point at spec roadmap + the
   source file).

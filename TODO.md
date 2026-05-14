@@ -1,8 +1,7 @@
 # TODO
 
 Open design questions and deferred work for the next release cycle.
-Release narrative lives in `CHANGELOG.md`; portfolio-level roadmap
-lives in `C:/dev/pn-specs/ROADMAP.md`.
+Release narrative lives in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Coverage snapshot (2026-05-09)
 

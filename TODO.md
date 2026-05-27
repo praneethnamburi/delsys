@@ -43,6 +43,24 @@ To regenerate this snapshot::
 
 ## Followups (target 0.5.0)
 
+- **HDF5 checkpoint follow-ups** (initial native checkpoint shipped in
+  `_hdf5.py` — see CHANGELOG `[Unreleased]`):
+  - **EMGworks native export.** `_parse_dataframe_emgworks` can't take
+    per-modality `target_sr=None` (`min(target_sr.values())` trips on `None`,
+    and it always calls `scipy.signal.resample`). Resolving this also closes
+    the standing "preserve native rate" open question (below). Note the
+    load-side reconciliation: the EMGworks parser resamples via
+    `scipy.signal.resample` while Discover uses `pysampled.Data.resample`, so
+    exact reload parity needs the reader to match the EMGworks path.
+  - **Lazy / partial reads + byte-budget LRU.** `read_into` currently hydrates
+    the whole file eagerly. For multi-trial / cross-project use (datanest data
+    fields), read only the accessed modalities/time-slices and cap resident
+    memory with a byte-budget LRU shared across open checkpoints.
+  - **Embed dropped-samples + richer header** in the checkpoint (parser writes
+    a `_dropped_samples.txt` sidecar today; fold it in for true self-containment).
+  - **datanest integration.** Loader pulls per-trial `clock_mul`/`t0` from the
+    trial-DB row so `db.add_data_field('delsys', loader, 'trial_id')` holds lazy
+    handles that hydrate + align on access.
 - **Migrate `_aggregate_bundles` to `pysampled.Data.merge_along_signal_name`**
   once pysampled ships those classmethods (deferred from pysampled
   1.2.0). Status check: pysampled 1.2.0 explicitly pulled them

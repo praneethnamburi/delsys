@@ -29,6 +29,7 @@ dependencies = [
     "heartpy",
     "neurokit2",
     "pysampled>=1.2.0",
+    "h5py",
 ]
 
 [project.optional-dependencies]

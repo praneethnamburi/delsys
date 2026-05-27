@@ -130,6 +130,14 @@ class Log:
     ) -> None:
         if target_sr is None:
             target_sr = TARGET_SR
+        if str(fname).lower().endswith((".h5", ".hdf5")):
+            # HDF5 checkpoint: rebuild from the stored signals, resampling native
+            # modalities to ``target_sr`` and applying ``clock_mul`` / ``t0`` at load.
+            # ``sensor_map`` / ``sensor_name_replace`` are ignored (already embedded).
+            from delsys import _hdf5
+
+            _hdf5.read_into(self, fname, target_sr=target_sr, clock_mul=clock_mul, t0=t0)
+            return
         if sensor_name_replace is None:
             sensor_name_replace = {}
         self.target_sr: Dict[str, Optional[float]] = target_sr
@@ -200,6 +208,29 @@ class Log:
 
         self.sensors: List[Sensor] = self._signals_to_sensors(sensors_info, self.signals)
         self.sensor_groups: Dict[str, Sequence[int]] = {}
+
+    def to_hdf5(self, path: str) -> str:
+        """Write this ``Log`` to a self-contained HDF5 checkpoint.
+
+        Each modality is stored in whatever rate this ``Log`` currently holds:
+        modalities loaded with ``target_sr=None`` are stored native and can be
+        re-resampled on reload; everything else is a terminal snapshot. The
+        channelmap and header are embedded, so the source CSV is no longer needed.
+        Reload with ``Log(path, target_sr=..., clock_mul=..., t0=...)``.
+
+        For the canonical CSV → native-checkpoint conversion, prefer
+        :func:`delsys.to_native_h5`, which loads at native rate for you.
+
+        Args:
+            path: Output ``.h5`` path.
+
+        Returns:
+            ``path`` (for chaining).
+        """
+        from delsys import _hdf5
+
+        _hdf5.write(self, path)
+        return path
 
     # ------------------------------------------------------------------
     # Internal CSV-reading helpers
@@ -398,34 +429,22 @@ class Log:
     # ------------------------------------------------------------------
 
     emg: Optional[EMG] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles(
-            [s.emg for s in self.sensors if hasattr(s, "emg")], EMG
-        )
+        lambda self: _aggregate_bundles([s.emg for s in self.sensors if hasattr(s, "emg")], EMG)
     )
     ekg: Optional[EKG] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles(
-            [s.ekg for s in self.sensors if hasattr(s, "ekg")], EKG
-        )
+        lambda self: _aggregate_bundles([s.ekg for s in self.sensors if hasattr(s, "ekg")], EKG)
     )
     acc: Optional[IMU] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles(
-            [s.acc for s in self.sensors if hasattr(s, "acc")], IMU
-        )
+        lambda self: _aggregate_bundles([s.acc for s in self.sensors if hasattr(s, "acc")], IMU)
     )
     gyro: Optional[IMU] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles(
-            [s.gyro for s in self.sensors if hasattr(s, "gyro")], IMU
-        )
+        lambda self: _aggregate_bundles([s.gyro for s in self.sensors if hasattr(s, "gyro")], IMU)
     )
     fsr: Optional[FSR] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles(
-            [s.fsr for s in self.sensors if hasattr(s, "fsr")], FSR
-        )
+        lambda self: _aggregate_bundles([s.fsr for s in self.sensors if hasattr(s, "fsr")], FSR)
     )
     analog = property(
-        lambda self: _aggregate_bundles(
-            [s.analog for s in self.sensors if hasattr(s, "analog")]
-        )
+        lambda self: _aggregate_bundles([s.analog for s in self.sensors if hasattr(s, "analog")])
     )
     vo2master: Optional[VO2Master] = property(  # type: ignore[assignment]
         lambda self: _aggregate_bundles(
@@ -434,9 +453,7 @@ class Log:
         )
     )
     hrstrap = property(
-        lambda self: _aggregate_bundles(
-            [s.hrstrap for s in self.sensors if hasattr(s, "hrstrap")]
-        )
+        lambda self: _aggregate_bundles([s.hrstrap for s in self.sensors if hasattr(s, "hrstrap")])
     )
 
     left: List[Sensor] = property(lambda self: [s for s in self.sensors if s.lrc == "L"])  # type: ignore[assignment]
@@ -677,9 +694,7 @@ class Log:
         emg_layout: List[Tuple[Any, str]] = []  # (sensor, modality) per EMG sensor
         feature_names: List[str] = []
         for sensor in self.sensors:
-            mod = next(
-                (m for m in sensor.modalities if m.startswith("EMG")), None
-            )
+            mod = next((m for m in sensor.modalities if m.startswith("EMG")), None)
             if mod is None:
                 continue
             emg_layout.append((sensor, mod))
@@ -805,12 +820,8 @@ class Log:
                     f"motion={{{emg_sensor.number}: {target!r}}}: "
                     f"no sensor with that location carries ACC."
                 )
-            raise TypeError(
-                f"motion dict values must be int or str, got {type(target).__name__}."
-            )
-        raise ValueError(
-            f"motion must be 'auto', a dict, or None; got {motion!r}."
-        )
+            raise TypeError(f"motion dict values must be int or str, got {type(target).__name__}.")
+        raise ValueError(f"motion must be 'auto', a dict, or None; got {motion!r}.")
 
     def _splice_emg_back(
         self,
@@ -1028,3 +1039,58 @@ class Log:
         print("data was saved:", save_name)
         df = pd.DataFrame.from_dict(emg_dict)
         return df.to_csv(save_name, index=None)
+
+
+def to_native_h5(
+    csv_path: str,
+    out_h5: Optional[str] = None,
+    *,
+    sensor_map: Optional[Union[str, List[SensorLog]]] = None,
+    sensor_name_replace: Optional[Dict[str, str]] = None,
+) -> str:
+    """Convert a Delsys CSV to a NATIVE-rate HDF5 checkpoint (Trigno Discover only).
+
+    The canonical ``csv -> .h5`` step: loads at the acquisition rate (no resampling
+    of Trigno-Base modalities; link devices keep their target rate), embeds the
+    channelmap and header, and writes ``float32`` + ``lzf``. ``clock_mul`` and ``t0``
+    are intentionally left at identity — alignment to another clock is applied later,
+    on load (``Log(out_h5, clock_mul=..., t0=...)``), not baked into storage.
+
+    The resulting ``.h5`` is self-contained, so the source CSV can be regenerated on
+    demand or discarded.
+
+    Args:
+        csv_path: Path to the Delsys CSV.
+        out_h5: Output ``.h5`` path. Defaults to ``csv_path`` with an ``.h5`` suffix.
+        sensor_map: Channelmap (path or pre-parsed list); ``None`` auto-builds from the CSV.
+        sensor_name_replace: Optional sensor-name correction map.
+
+    Returns:
+        The output ``.h5`` path.
+
+    Raises:
+        NotImplementedError: For EMGworks files. EMGworks native extraction needs the
+            per-modality ``target_sr=None`` parser path (the "preserve native rate"
+            open question in ``TODO.md``); only Trigno Discover is supported today.
+    """
+    from delsys import _hdf5
+
+    if out_h5 is None:
+        out_h5 = os.path.splitext(csv_path)[0] + ".h5"
+    application = _parse_hdr(csv_path, sensor_name_replace)["application"]
+    if application == "EMGworks":
+        raise NotImplementedError(
+            "Native HDF5 export currently supports Trigno Discover only; got an EMGworks "
+            "file. EMGworks native extraction requires the per-modality target_sr=None "
+            "parser path (see TODO.md, 'preserve native rate')."
+        )
+    lf = Log(
+        csv_path,
+        sensor_map=sensor_map,
+        target_sr=_hdf5.NATIVE_SR,
+        clock_mul=1.0,
+        t0=0.0,
+        sensor_name_replace=sensor_name_replace,
+    )
+    _hdf5.write(lf, out_h5)
+    return out_h5

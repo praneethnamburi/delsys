@@ -7,6 +7,11 @@ configurable per-modality target rate, and groups the result into per-sensor
 modality bundles (:class:`EMG`, :class:`EKG`, :class:`IMU`, :class:`FSR`,
 :class:`VO2Master`).
 
+A :class:`Log` can also be saved to / loaded from a self-contained HDF5
+checkpoint: :func:`to_native_h5` converts a CSV to a native-rate ``.h5`` (the
+source CSV then becomes disposable), and ``Log("trial.h5", target_sr=...)``
+reloads it, resampling on the fly. See :func:`to_native_h5`.
+
 Classes:
     Log: Top-level loader; the only entry point most users need.
 
@@ -49,7 +54,7 @@ from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
 from delsys.cleaning import CleaningConfig, CleaningResult
 from delsys.ekg import EKG
 from delsys.emg import EMG
-from delsys.log import Log
+from delsys.log import Log, to_native_h5
 from delsys.sensor import Sensor
 from delsys.signals import FSR, IMU, Signal, VO2Master
 
@@ -58,6 +63,8 @@ __version__ = "0.4.1"
 __all__ = [
     # primary entry point
     "Log",
+    # HDF5 checkpoint converter (csv -> native .h5; reload via Log(".h5"))
+    "to_native_h5",
     # signal classes
     "Signal",
     "Sensor",

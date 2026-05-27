@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HDF5 native checkpoint.** `delsys.to_native_h5(csv, out_h5)` converts a
+  Trigno Discover CSV into a self-contained, native-rate HDF5 checkpoint, and
+  `Log(path, target_sr=..., clock_mul=..., t0=...)` reloads it (the constructor
+  now dispatches on a `.h5`/`.hdf5` suffix). `Log.to_hdf5(path)` writes the
+  current `Log` directly. Design:
+  - **Native storage, resample-on-load.** Trigno-Base modalities are stored at
+    the acquisition rate (`target_sr=None`) and re-resampled when read; async
+    link devices (VO2/HR/SmO2/Thb) are written as terminal snapshots. `clock_mul`
+    and `t0` are *not* baked in — alignment to another clock is a load-time
+    argument, so one checkpoint serves any target rate / clock without re-export.
+  - **`float32` + `lzf`**, lossless vs the CSV's ~7 significant figures; the
+    reader upcasts to `float64` before any resampling, so no downstream numeric
+    work (filters, ICA) runs in single precision. Round-trips bitwise (within
+    float32) against `Log(csv)` across all Discover fixtures incl. link devices;
+    on real recordings the `.h5` is ~8-9x smaller than the pickle and the
+    self-contained checkpoint makes the source CSV disposable.
+  - The embedded channelmap + canonical sensor order keep multi-sensor bundle
+    columns in their `Log(csv)` order.
+  - Adds an `h5py` dependency.
+  - **Limitation:** EMGworks native export raises `NotImplementedError` (its
+    parser does not yet accept per-modality `target_sr=None`; see `TODO.md`).
+
 ## [0.4.1] - 2026-05-10
 
 ### Fixed

@@ -162,7 +162,11 @@ class Log:
             Path(self.fname).parent, Path(self.fname).stem + "_dropped_samples.txt"
         )
 
+        # Raw (un-snapped) time extent — only EMGworks needs it (target-dependent
+        # window); Discover's window is ``(0, duration)`` and target-independent.
+        self._raw_window: Optional[Tuple[float, float]] = None
         if parser_tag == "emgworks":
+            _win: Dict[str, float] = {}
             self.t_min, self.t_max, self.sr_orig, self.signals = _parse_dataframe_emgworks(
                 df,
                 self.signal_map,
@@ -172,7 +176,9 @@ class Log:
                 time_names,
                 self.clock_mul,
                 self.t0,
+                out_window=_win,
             )
+            self._raw_window = (_win["raw_t_min"], _win["raw_t_max"])
         elif parser_tag == "discover_link":
             self.t_min, self.t_max, self.sr_orig, self.signals = (
                 _parse_dataframe_discover_with_link(
@@ -1065,25 +1071,20 @@ def to_native_h5(
         sensor_map: Channelmap (path or pre-parsed list); ``None`` auto-builds from the CSV.
         sensor_name_replace: Optional sensor-name correction map.
 
+    Note:
+        EMGworks checkpoints store signals on the widest (min_sr=1) window and trim to
+        the requested window on reload; reload at ``clock_mul=1`` reproduces
+        ``Log(csv, target_sr)`` bitwise. A ``clock_mul != 1`` reload of an EMGworks
+        checkpoint is rejected (its native interpolation grid is fixed at export time);
+        Discover checkpoints have no such restriction.
+
     Returns:
         The output ``.h5`` path.
-
-    Raises:
-        NotImplementedError: For EMGworks files. EMGworks native extraction needs the
-            per-modality ``target_sr=None`` parser path (the "preserve native rate"
-            open question in ``TODO.md``); only Trigno Discover is supported today.
     """
     from delsys import _hdf5
 
     if out_h5 is None:
         out_h5 = os.path.splitext(csv_path)[0] + ".h5"
-    application = _parse_hdr(csv_path, sensor_name_replace)["application"]
-    if application == "EMGworks":
-        raise NotImplementedError(
-            "Native HDF5 export currently supports Trigno Discover only; got an EMGworks "
-            "file. EMGworks native extraction requires the per-modality target_sr=None "
-            "parser path (see TODO.md, 'preserve native rate')."
-        )
     lf = Log(
         csv_path,
         sensor_map=sensor_map,

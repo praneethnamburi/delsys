@@ -69,6 +69,16 @@ def write(lf, path):
         # (h5py iterates groups alphabetically, which would otherwise scramble it.)
         f.attrs["sensor_order_json"] = json.dumps([int(s.number) for s in lf.sensors])
 
+        # EMGworks' time window depends on the requested target_sr (Discover's is
+        # ``(0, duration)``, target-independent). A native export uses the widest
+        # (min_sr=1) window; recording the raw un-snapped extent lets the reader trim
+        # back to the exact window of whatever target_sr it's reloaded with.
+        raw_window = getattr(lf, "_raw_window", None)
+        if raw_window is not None:
+            f.attrs["window_mode"] = "emgworks"
+            f.attrs["raw_t_min"] = float(raw_window[0])
+            f.attrs["raw_t_max"] = float(raw_window[1])
+
         cm = f.create_group("channelmap")
         for i, sl in enumerate(lf.sensor_map):
             g = cm.create_group(str(i))
@@ -135,6 +145,32 @@ def read_into(lf, path, target_sr=None, clock_mul=1.0, t0=0.0):
         lf.t_max = float(f.attrs["t_max"])
         sensor_order = json.loads(f.attrs["sensor_order_json"])
 
+        # EMGworks: the checkpoint stored signals on the widest (min_sr=1) window;
+        # trim back to the exact window this target_sr would produce so reload matches
+        # Log(csv, target_sr) bitwise. (The native interp grid is baked at clock_mul=1,
+        # so a clock-shifted reload can't be reproduced by reinterpretation.)
+        window_mode = f.attrs["window_mode"] if "window_mode" in f.attrs else None
+        emg_t_min = emg_t_max = None
+        if window_mode == "emgworks":
+            if abs(lf.clock_mul - 1.0) > 1e-12:
+                raise NotImplementedError(
+                    "Reloading an EMGworks checkpoint with clock_mul != 1 is not "
+                    "supported: the native interpolation grid is fixed at clock_mul=1. "
+                    "Reload at clock_mul=1 (or re-export). Discover checkpoints are exempt."
+                )
+            _grid = [v for v in target_sr.values() if v is not None]
+            if _grid:  # a fully-native reload keeps the stored window (no trim)
+                _min_sr = min(_grid)
+                raw_t_min = float(f.attrs["raw_t_min"])
+                raw_t_max = float(f.attrs["raw_t_max"])
+                emg_t_min = np.floor(raw_t_min * _min_sr) / _min_sr
+                emg_t_max = np.ceil(raw_t_max * _min_sr) / _min_sr
+                if abs(emg_t_min - lf.t_min) > 1e-9:
+                    raise NotImplementedError(
+                        "EMGworks checkpoint reload with a nonzero start-time window "
+                        f"(t_min={emg_t_min}) is not supported."
+                    )
+
         cm = f["channelmap"]
         lf.sensor_map = [
             SensorLog(
@@ -169,6 +205,9 @@ def read_into(lf, path, target_sr=None, clock_mul=1.0, t0=0.0):
             snum = int(g.attrs["sensor_number"])
             stored_sr = float(g.attrs["sr"])
             if bool(g.attrs["is_native"]):
+                if emg_t_max is not None:  # EMGworks: trim superset window to target's
+                    n_ref = int((emg_t_max - emg_t_min) * stored_sr) + 1
+                    data = data[:n_ref]
                 sr_eff = stored_sr * lf.clock_mul
                 sr_targ = target_sr.get(mod)
                 base = pysampled.Data(data, sr=sr_eff)

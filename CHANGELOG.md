@@ -28,8 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The embedded channelmap + canonical sensor order keep multi-sensor bundle
     columns in their `Log(csv)` order.
   - Adds an `h5py` dependency.
-  - **Limitation:** EMGworks native export raises `NotImplementedError` (its
-    parser does not yet accept per-modality `target_sr=None`; see `TODO.md`).
+  - **EMGworks** is supported alongside Discover. Its time window depends on the
+    requested `target_sr` (Discover's is `(0, duration)`), so the checkpoint stores
+    the widest (`min_sr=1`) window plus the raw extent and *trims* on reload to
+    reproduce `Log(csv, target_sr)` bitwise for any target. Reload must use
+    `clock_mul=1` (the native interpolation grid is fixed at export); a
+    clock-shifted EMGworks reload raises `NotImplementedError`. Discover has no such
+    restriction.
+
+### Changed
+
+- `_parse_dataframe_emgworks` now accepts per-modality `target_sr=None`
+  (preserve-native), needed by the HDF5 checkpoint's native export. The
+  channel-grid window still snaps to the coarsest *requested* rate exactly as
+  before (existing `Log(csv, target_sr)` output is unchanged, verified bitwise);
+  `None` entries are simply excluded from that snap instead of crashing it.
 
 ## [0.4.1] - 2026-05-10
 

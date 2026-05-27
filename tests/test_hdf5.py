@@ -83,7 +83,47 @@ def test_clock_mul_applied_on_load(fixtures_dir, tmp_path):
     assert np.allclose(np.array(scaled.sr_orig), np.array(base.sr_orig) * 1.01)
 
 
-def test_emgworks_native_not_implemented(fixtures_dir):
-    """EMGworks native export is the documented gap -> explicit NotImplementedError."""
+# EMGworks' time window depends on target_sr, so the checkpoint stores the widest
+# (min_sr=1) window and trims on reload. Verify parity at several reload targets,
+# including a custom one whose min rate differs from the export's.
+_EMG_DEFAULT = TARGET_SR
+_EMG_CUSTOM = {
+    "EMGS": 1440,
+    "EMGD": 1440,
+    "EMGQ": 1440,
+    "ACC": 240,
+    "GYRO": 240,
+    "FSR": 240,
+    "EKG": 1440,
+    "Analog": 4800,
+}  # min_sr=240
+
+
+@pytest.mark.parametrize("target", [_EMG_DEFAULT, _EMG_CUSTOM], ids=["default", "custom_min240"])
+def test_emgworks_roundtrip_parity(target, fixtures_dir, tmp_path):
+    """EMGworks Log(.h5) reproduces Log(.csv) bitwise (within float32) for any target,
+    via the superset-window-then-trim reload path."""
+    csv = str(fixtures_dir / "emgworks.csv")
+    ref = delsys.Log(csv, target_sr=target)
+    h5 = str(tmp_path / "emgworks.h5")
+    delsys.to_native_h5(csv, h5)
+    got = delsys.Log(h5, target_sr=target)
+    for m in BUNDLES:
+        rb, gb = getattr(ref, m, None), getattr(got, m, None)
+        assert (rb is None) == (gb is None), f"{m}: presence"
+        if rb is None:
+            continue
+        ra, ga = np.asarray(rb._sig), np.asarray(gb._sig)
+        assert ra.shape == ga.shape, f"{m}: shape {ra.shape} vs {ga.shape}"
+        assert np.allclose(ra, ga, rtol=1e-4, atol=1e-5), f"{m}: values"
+
+
+def test_emgworks_clock_mul_reload_rejected(fixtures_dir, tmp_path):
+    """An EMGworks checkpoint's interp grid is fixed at clock_mul=1; a clock-shifted
+    reload is rejected rather than silently returning a mismatched signal."""
+    csv = str(fixtures_dir / "emgworks.csv")
+    h5 = str(tmp_path / "emgworks.h5")
+    delsys.to_native_h5(csv, h5)
+    delsys.Log(h5, target_sr=TARGET_SR, clock_mul=1.0)  # ok
     with pytest.raises(NotImplementedError):
-        delsys.to_native_h5(str(fixtures_dir / "emgworks.csv"))
+        delsys.Log(h5, target_sr=TARGET_SR, clock_mul=1.0001)

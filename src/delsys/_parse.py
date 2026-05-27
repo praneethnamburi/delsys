@@ -447,6 +447,8 @@ def _parse_dataframe_emgworks(
     time_names: List[str],
     clock_mul: float,
     t0: float,
+    *,
+    out_window: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, float, List[float], List[Signal]]:
     """Build :class:`Signal` objects from an EMGworks dataframe.
 
@@ -456,8 +458,11 @@ def _parse_dataframe_emgworks(
     target rate.
 
     Returns:
-        ``(t_min, t_max, sr_list, signals)``. ``sr_list`` holds the
-        deduced (pre-resample) sampling rate per channel.
+        ``(t_min, t_max, sr_list, signals)``. ``sr_list`` holds the deduced
+        (pre-resample) sampling rate per channel. If ``out_window`` (a dict) is
+        passed, it is populated with the un-snapped ``raw_t_min`` / ``raw_t_max``
+        extent (before the ``min_sr`` grid snap), which the HDF5 checkpoint uses to
+        trim back to any target's window.
     """
     sensors_by_number = _sensors_by_number(sensors_info)
     t_min_list: List[float] = []
@@ -475,9 +480,20 @@ def _parse_dataframe_emgworks(
         sr_deduced = 1 / np.median(np.diff(t))
         sr_list.append(_quantize_to_trigno_frame(sr_deduced) * clock_mul)
         ts_list.append(ts)
-    min_sr = np.min(list(target_sr.values()))
-    t_min = np.floor(np.min(t_min_list) * min_sr) / min_sr
-    t_max = np.ceil(np.max(t_max_list) * min_sr) / min_sr
+    # The common time window snaps to the coarsest *resampled* grid so all channels
+    # align to integer sample counts. ``target_sr`` values of ``None`` (preserve-
+    # native) carry no resampled grid, so they're excluded; when every modality is
+    # native (the HDF5-checkpoint export path) the window snaps to the coarsest of
+    # the remaining link-device rates (1 Hz), giving the widest window. The raw
+    # (un-snapped) extent is returned alongside so a native checkpoint can later trim
+    # back to the exact window of any requested ``target_sr`` (see ``_hdf5``).
+    raw_t_min, raw_t_max = float(np.min(t_min_list)), float(np.max(t_max_list))
+    if out_window is not None:
+        out_window["raw_t_min"], out_window["raw_t_max"] = raw_t_min, raw_t_max
+    _grid_rates = [v for v in target_sr.values() if v is not None] or list(sr_list)
+    min_sr = np.min(_grid_rates)
+    t_min = np.floor(raw_t_min * min_sr) / min_sr
+    t_max = np.ceil(raw_t_max * min_sr) / min_sr
 
     signals: List[Signal] = []
     for ts, sr, sig_info in zip(ts_list, sr_list, signal_map):
@@ -486,8 +502,11 @@ def _parse_dataframe_emgworks(
         t = np.linspace(t_min, this_t_max, n_samples)
         sig = interp1d(ts[:, 0] / clock_mul, ts[:, 1], fill_value="extrapolate")(t)
         sr_targ = target_sr[sig_info.modality]
-        sig_resampled = resample(sig, round(n_samples * sr_targ / sr))
-        signals.append(_make_signal(sig_resampled, sr_targ, sig_info, sensors_by_number, t0))
+        if sr_targ is None:  # preserve native rate (no resampling)
+            sig_resampled, out_sr = sig, sr
+        else:
+            sig_resampled, out_sr = resample(sig, round(n_samples * sr_targ / sr)), sr_targ
+        signals.append(_make_signal(sig_resampled, out_sr, sig_info, sensors_by_number, t0))
 
     return t_min, t_max, sr_list, signals
 

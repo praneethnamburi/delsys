@@ -43,15 +43,14 @@ To regenerate this snapshot::
 
 ## Followups (target 0.5.0)
 
-- **HDF5 checkpoint follow-ups** (initial native checkpoint shipped in
-  `_hdf5.py` — see CHANGELOG `[Unreleased]`):
-  - **EMGworks native export.** `_parse_dataframe_emgworks` can't take
-    per-modality `target_sr=None` (`min(target_sr.values())` trips on `None`,
-    and it always calls `scipy.signal.resample`). Resolving this also closes
-    the standing "preserve native rate" open question (below). Note the
-    load-side reconciliation: the EMGworks parser resamples via
-    `scipy.signal.resample` while Discover uses `pysampled.Data.resample`, so
-    exact reload parity needs the reader to match the EMGworks path.
+- **HDF5 checkpoint follow-ups** (native checkpoint for Discover + EMGworks
+  shipped in `_hdf5.py` — see CHANGELOG `[Unreleased]`):
+  - **EMGworks `clock_mul != 1` reload.** Currently rejected: the native interp
+    grid is fixed at export (`clock_mul=1`), so a clock-shifted reload can't be
+    reproduced by reinterpretation. Supporting it would mean storing the raw
+    per-channel (timestamp, value) pairs and re-interpolating at load — defeats the
+    uniform-grid storage. Revisit only if a sync workflow needs to reload EMGworks
+    checkpoints directly at a non-unit clock (gaitmusic resamples post-load today).
   - **Lazy / partial reads + byte-budget LRU.** `read_into` currently hydrates
     the whole file eagerly. For multi-trial / cross-project use (datanest data
     fields), read only the accessed modalities/time-slices and cap resident

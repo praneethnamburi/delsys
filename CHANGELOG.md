@@ -58,6 +58,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `clock_mul=1` (the native interpolation grid is fixed at export); a
     clock-shifted EMGworks reload raises `NotImplementedError`. Discover has no such
     restriction.
+- **`delsys.clean(source)`** — batch EMG/EKG-artifact cleaning of native `.h5`
+  checkpoints (mirrors `delsys.process`): walks a path/folder/iterable for raw
+  `Trial_*.h5`, runs `Log.clean_emg_ekg_artifact` on each, and writes a
+  terminal-snapshot `<stem>_cleaned.h5` plus a `<stem>_cleaning_report.pdf` next
+  to the checkpoint. Idempotent (`skip_existing` / `overwrite`), `tqdm` progress,
+  per-folder `delsys_cleaning_report.txt`, returns a `{raw_h5: status}` dict
+  (`"cleaned"` / `"hit"` / `"skipped: ..."` / `"error: ..."`). The raw checkpoint
+  is immutable; its own `*_cleaned.h5` outputs are skipped on re-walk. A fresh
+  `Log` is loaded per trial, so the in-place cleaning never touches a Log a caller
+  holds.
+  - **Decisions manifest** (`delsys_cleaning.json`, per-folder, keyed by
+    checkpoint stem) makes the cleaning reproducible: `cleaned.h5 = f(raw.h5,
+    manifest)`. Each entry records the ICA components removed, the spliced variant
+    (`splice_source`), the motion pairing, an optional `noise_event_ref`, an
+    `accept` review flag, and the rest of the `CleaningConfig` knobs. Marking a
+    trial's `accept` `false` (after eyeballing its PDF) blocks regeneration even
+    under `overwrite=True` until the decision is fixed and the flag flipped back.
+    A trial with no entry is cleaned with
+    auto-detection and its resolved decision is *frozen* into the manifest; a
+    later pass replays the frozen decision (auto-detection off, recorded
+    components applied verbatim). Because the FastICA fit is seeded, a re-run
+    reproduces the cleaned checkpoint bit-for-bit — verified on the pia02 sandbox
+    (a forced replay of a ~5.9M-sample cleaned trial is byte-identical). The
+    `config` argument is only the base for trials *without* an entry; it never
+    overrides an existing decision. Edit the manifest (swap the auto-chosen IC,
+    change `splice_source`, attach a noise event) and re-run with `overwrite=True`
+    to regenerate just the touched trials.
+- **Noise-window consumption** (`delsys._noise`) — reads human-authored noise
+  Events (marked in `datanavigator`'s `SignalBrowser`) as **plain JSON**, with no
+  `datanavigator` dependency. `read_noise_intervals(path, trial_id)` parses the
+  `[metadata, data]` Event file (effective windows = `default + added` minus
+  `removed`; a tuple `trial_id` is stringified to match the on-disk
+  `"(2, 14, 17)"` key). `apply_noise_mask(lf, intervals)` blanks each window to
+  `NaN` and interpolates it back (`policy="nan_interp"`), modality-agnostically
+  (a noise window is a wall-clock span — EMG, ACC, … all get the same treatment),
+  rebuilding the per-sensor bundles so the change is visible to the cleaner.
+  `delsys.clean` wires this in: a manifest entry's `noise_event_ref` (`{path,
+  key}`) is applied before the artifact cleaner runs, and the per-folder report
+  notes `noise_masked=N`. The v1 surface covers the batch hook; per-modality
+  window scoping and alternative fill policies are follow-ups (see `TODO.md`).
+- `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
+  `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop
+  and authoring noise masks in `datanavigator`'s `SignalBrowser`.
 
 ### Changed
 

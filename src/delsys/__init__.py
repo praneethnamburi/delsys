@@ -54,6 +54,7 @@ from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
 from delsys.cleaning import CleaningConfig, CleaningResult
 from delsys.ekg import EKG
 from delsys.emg import EMG
+from delsys._clean import clean
 from delsys._process import process, read_channelmap
 from delsys.log import Log, to_native_h5
 from delsys.sensor import Sensor
@@ -69,6 +70,8 @@ __all__ = [
     # batch conversion + channelmap parsing
     "process",
     "read_channelmap",
+    # batch EMG/EKG-artifact cleaning (raw .h5 -> *_cleaned.h5 + manifest)
+    "clean",
     # signal classes
     "Signal",
     "Sensor",

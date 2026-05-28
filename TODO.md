@@ -64,6 +64,26 @@ To regenerate this snapshot::
   once pysampled ships those classmethods (deferred from pysampled
   1.2.0). Status check: pysampled 1.2.0 explicitly pulled them
   before release; revisit when pysampled 1.3.0 plans firm up.
+- **Batch cleaning (`delsys.clean`) follow-ups** (the batch/manifest/docs layer
+  shipped in `_clean.py` + `_noise.py` — see CHANGELOG `[Unreleased]`):
+  - **Noise-mask consumption — full implementation.** v1 wires the hook: a
+    manifest `noise_event_ref` is read as plain JSON and applied with the
+    NaN+interpolate policy across *all* modalities before cleaning. Fast-follow:
+    (a) per-modality / per-sensor window scoping (the bicep-ACC Event shouldn't
+    necessarily blank the EKG); (b) alternative fill policies beyond
+    `nan_interp` (hold-last, zero, exclude-from-fit); (c) decide whether the
+    masked windows should be *recorded* in the cleaned `.h5` (a `noise_mask`
+    dataset) so downstream code can re-exclude them rather than trust the
+    interpolation.
+  - **Trial-id ↔ checkpoint mapping.** The manifest is keyed by checkpoint stem
+    (`Trial_5`), while datanavigator noise Events are keyed by the external
+    trial-id tuple (`(2, 14, 17)`), carried in `noise_event_ref.key`. When the
+    datanest trial-DB lands, let `clean()` accept a `trial_id` resolver so the
+    tuple can be derived from the row instead of hand-written into each entry.
+  - **Manifest-driven `target_sr` / `clock_mul`.** `clean()` cleans at one
+    `target_sr` (default `TARGET_SR`) and `clock_mul=1`; per-trial alignment
+    (from the trial-DB row) is a downstream concern today. Revisit once the
+    datanest integration pulls `clock_mul`/`t0` per trial.
 - **Plotting helpers for the cleaner.** Port
   `plot_ica_components` / `plot_signals_before_after` from
   `pn-projects/projects/emg_ica_cleaning.py` if a downstream caller

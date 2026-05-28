@@ -246,13 +246,27 @@ def _clean_one(
             noise_ref = None
             is_new = True
 
-        # Noise hook: consume human-authored noise windows when referenced.
+        # Noise hook: consume human-authored noise windows. An explicit manifest
+        # noise_event_ref wins; otherwise default to a sibling
+        # <stem>.delsys-noise sidecar when present (recorded as provenance so a
+        # replay re-consumes the same sidecar). Consumption dispatches by
+        # suffix: a .delsys-noise path is the per-signal sidecar; anything else
+        # is a trial-keyed datanavigator Event JSON.
+        from delsys import _noise
+
+        if not noise_ref:
+            sidecar = _noise.sidecar_path_for(raw_h5)
+            if os.path.exists(sidecar):
+                noise_ref = os.path.basename(sidecar)
+
         noise_touched = 0
         if noise_ref:
-            from delsys import _noise
-
             npath, nkey = _resolve_noise_ref(noise_ref, raw_h5)
-            noise_touched = _noise.apply_noise_events(lf, npath, nkey)
+            if npath and npath.endswith(_noise.SIDECAR_SUFFIX):
+                if os.path.exists(npath):
+                    noise_touched = _noise.apply_noise_sidecar(lf, npath)
+            elif npath and os.path.exists(npath):
+                noise_touched = _noise.apply_noise_events(lf, npath, nkey)
 
         result = lf.clean_emg_ekg_artifact(
             config=cfg,

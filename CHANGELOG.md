@@ -98,6 +98,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key}`) is applied before the artifact cleaner runs, and the per-folder report
   notes `noise_masked=N`. The v1 surface covers the batch hook; per-modality
   window scoping and alternative fill policies are follow-ups (see `TODO.md`).
+- **Per-signal noise sidecar** (`<stem>.delsys-noise`, in `delsys._noise`) — a
+  delsys-file-centric noise record that travels next to one `Trial_N.h5`, keyed
+  by a structural *signal address* (vs the trial-id-keyed, flat-interval
+  datanavigator Event path above). Composite suffix (not `.json`) so portfolio
+  `*.json` tooling skips it.
+  - **Key grammar** `"<sensor>.<modality>[.<coord>] | <label>"` —
+    `parse_key` / `format_key` / `format_signal_key` / `resolve_key`. The address
+    left of `" | "` is authoritative (`<modality>` ∈ EMGS/EMGD/EMGQ/ACC/GYRO/FSR;
+    `<coord>` from each modality's `SUBCHANNEL_MAP`); omitting `<coord>` fans out
+    to every sub-channel of that sensor+modality. The label is informational and
+    ignored on resolve, reusing the sensor/modality/sub-channel matching of
+    `Log._splice_emg_back`.
+  - **Per-signal masking** — `apply_noise_mask` is refactored onto a shared
+    `_mask_signals` core (its flat-interval, modality-agnostic behavior is
+    unchanged). New `apply_noise_sidecar(lf, path)` resolves each key to columns
+    and applies, per signal, two span kinds: `windows` (transient noise → NaN +
+    interpolate) and `dead` (no usable signal → **zero-fill**, applied after
+    interpolation so it wins overlaps). Spans accept `null` endpoints — `[T, null]`
+    = dead from `T` onward, `[null, null]` (or `"dead": true`) = the whole extent
+    — so a sensor that dies mid-recording and one dead from the start use the same
+    field. JSON body `{"schema", "signals": {key: {"windows", "dead"}}}` via
+    `read_noise_sidecar` / `write_noise_sidecar` (a bare list value is windows-only
+    shorthand).
+  - `delsys.clean` defaults a trial's `noise_event_ref` to a sibling
+    `<stem>.delsys-noise` when present (consumed before the cleaner; the resolved
+    basename is frozen into the manifest as provenance). Consumption dispatches by
+    suffix, so existing datanavigator-Event refs still work.
 - `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
   `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop
   and authoring noise masks in `datanavigator`'s `SignalBrowser`.

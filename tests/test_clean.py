@@ -321,3 +321,23 @@ def test_clean_consumes_noise_event(raw_checkpoint):
     delsys.clean(str(folder), overwrite=True, progress=False)
     report = (folder / "delsys_cleaning_report.txt").read_text()
     assert "noise_masked=" in report
+
+
+def test_clean_auto_consumes_sibling_delsys_noise(raw_checkpoint):
+    """A sibling ``<stem>.delsys-noise`` is consumed by default and recorded as
+    provenance in the manifest's ``noise_event_ref``."""
+    from delsys._noise import format_signal_key, sidecar_path_for, write_noise_sidecar
+
+    raw, folder = raw_checkpoint
+
+    # Author a sidecar next to the checkpoint, addressing one real signal.
+    key = format_signal_key(delsys.Log(str(raw)).signals[0])
+    write_noise_sidecar(sidecar_path_for(str(raw)), {key: [[0.02, 0.05]]})
+
+    res = delsys.clean(str(folder), progress=False)
+    assert res[str(raw)] == "cleaned"
+
+    # Defaulted ref points at the sibling sidecar (provenance, not the windows).
+    entry = read_manifest(folder)["trials"]["Trial_5"]
+    assert entry["noise_event_ref"] == "Trial_5" + ".delsys-noise"
+    assert "noise_masked=" in (folder / "delsys_cleaning_report.txt").read_text()

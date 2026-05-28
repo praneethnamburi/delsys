@@ -7,6 +7,7 @@ datanavigator (the optional GUI dependency) isn't importable.
 """
 
 import shutil
+from types import SimpleNamespace
 
 import matplotlib
 
@@ -98,3 +99,33 @@ def test_annotate_seeds_from_existing_sidecar(fixtures_dir, tmp_path):
 
     ann = lf.annotate_noise()
     assert ann._ann[key]["windows"] == [[0.2, 0.3]]
+
+
+def test_annotate_keypress_marks_window(fixtures_dir, tmp_path):
+    """Two '1' presses (start, then end) at the cursor add a window."""
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise()
+    ann._current_idx = 0
+    ann._mark_point(SimpleNamespace(xdata=0.02))
+    ann._mark_point(SimpleNamespace(xdata=0.05))
+
+    key = format_signal_key(lf.signals[0])
+    assert ann._ann[key]["windows"] == [[0.02, 0.05]]
+
+
+def test_annotate_keypress_removes_nearest_window(fixtures_dir, tmp_path):
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise()
+    ann._current_idx = 0
+    ann.add_window(0.02, 0.05)
+    ann.add_window(0.10, 0.12)
+    ann._remove_window(SimpleNamespace(xdata=0.11))  # nearest the second window
+
+    key = format_signal_key(lf.signals[0])
+    assert ann._ann[key]["windows"] == [[0.02, 0.05]]
+
+
+def test_annotate_auto_limits_on_by_default(fixtures_dir, tmp_path):
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise()
+    assert ann.buttons["Auto limits"].state is True

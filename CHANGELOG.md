@@ -128,13 +128,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Log.annotate_noise()`** — interactive per-signal noise annotator
   (`delsys.annotate`, a `datanavigator` `SignalBrowser` subclass; `datanavigator`
   is imported lazily so the delsys core stays dnav-free). Browse the Log's signals
-  via the sidebar dropdown (labelled by structural key); drag-select noise
-  windows, with a **Mod scope** toggle to record against the channel (coord-ful)
-  or whole sensor+modality (coord-less); **Toggle dead** for a dead channel;
-  **Undo window**; **Save noise** writes the `<stem>.delsys-noise` sidecar
-  (seeded from an existing one on open). Marked windows/dead spans are shaded on
-  the trace. The annotator owns the sidecar read/write. (Interactive ICA cleaning
-  from the same browser is a follow-up.)
+  via the sidebar dropdown (labelled by structural key). Mark windows by hovering
+  the cursor and pressing **`1`** (two presses fix the window's start/end) and
+  **`alt+1`** to remove the nearest; a **Mod scope** toggle records against the
+  channel (coord-ful) or whole sensor+modality (coord-less); **Toggle dead** for a
+  dead channel; **Undo window**; **Save noise** writes the `<stem>.delsys-noise`
+  sidecar (auto-seeded from an existing one on open). Marked windows/dead spans
+  are shaded on the trace. Opens wide, auto-scaling, with labelled axes
+  (`time (s)` / `<modality> (<unit>)`). The annotator owns the sidecar read/write.
+  (Interactive ICA cleaning from the same browser is a follow-up.)
 - `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
   `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop;
   section 4 now leads with `lf.annotate_noise()` + the `.delsys-noise` sidecar

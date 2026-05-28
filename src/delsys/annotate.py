@@ -32,12 +32,26 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
-from matplotlib.widgets import SpanSelector
+from matplotlib import pyplot as plt
 
 from delsys import _noise
 
 #: Sentinel span for a whole-recording dead channel (open both ends).
 _WHOLE_EXTENT = [None, None]
+
+#: Conventional Trigno display units per modality, for the y-axis label. These
+#: are *conventions* (not read from the file — the loader doesn't carry units);
+#: adjust if a particular export differs.
+_MODALITY_UNITS = {
+    "EMGS": "V",
+    "EMGD": "V",
+    "EMGQ": "V",
+    "EKG": "V",
+    "ACC": "g",
+    "GYRO": "deg/s",
+    "FSR": "a.u.",
+    "Analog": "V",
+}
 
 
 def _build_noise_annotator_class():
@@ -56,7 +70,12 @@ def _build_noise_annotator_class():
             # In-memory annotation: {key: {"windows": [[a,b],...], "dead": [...]}}.
             self._ann: Dict[str, dict] = self._load_existing()
             self._overlay_artists: list = []
-            self._spanselector = None
+            # Buffer for the two-keypress "add window" (start, then end).
+            self._mark_buffer: list = []
+            # A wider default figure -- the trace reads better than the square
+            # default; callers can still pass their own figure_handle.
+            if figure_handle is None:
+                figure_handle = plt.figure(figsize=(14, 5))
             # Must precede super().__init__: SignalBrowser.__init__ calls update(),
             # which our override extends to draw overlays from the state above.
             # titlefunc shows the structural key (with location) -- the default
@@ -69,6 +88,9 @@ def _build_noise_annotator_class():
                 figure_handle=figure_handle,
             )
             self._add_controls()
+            # Default to auto-scaling the y-axis as you flip signals.
+            if "Auto limits" in self.buttons:
+                self.buttons["Auto limits"].set_state(True)
             self.update()
 
         # -- annotation state -------------------------------------------------
@@ -148,12 +170,16 @@ def _build_noise_annotator_class():
         # -- UI wiring --------------------------------------------------------
 
         def _add_controls(self) -> None:
-            # Drag-to-mark a window on the trace axes.
-            self._spanselector = SpanSelector(
-                self._ax,
-                lambda a, b: self.add_window(a, b),
-                "horizontal",
-                useblit=False,
+            # Free the digit keys for marking: GenericBrowser otherwise treats
+            # 1-9 as memory slots (storing _current_idx), which we don't use.
+            self.memoryslots.disable()
+            # Keypress marking (hover the cursor at the spot, then press):
+            #   '1'     -> add a window: two presses fix its start and end;
+            #   'alt+1' -> remove the window nearest the cursor.
+            # (Both act on the current scope -- channel or whole-modality.)
+            self.add_key_binding("1", self._mark_point, description="Add noise window (2 presses)")
+            self.add_key_binding(
+                "alt+1", self._remove_window, description="Remove nearest noise window"
             )
             self.buttons.add(
                 text="Save noise", type_="Push", action_func=lambda e: self.save()
@@ -163,11 +189,48 @@ def _build_noise_annotator_class():
             # Scope toggle: False -> channel (coord-ful), True -> sensor+modality.
             self.buttons.add(text="Mod scope", type_="Toggle", start_state=False)
 
+        def _mark_point(self, event=None) -> None:
+            """Collect a cursor x; on the second press, add the window it spans."""
+            x = getattr(event, "xdata", None)
+            if x is None:  # cursor not over the trace
+                return
+            self._mark_buffer.append(float(x))
+            if len(self._mark_buffer) < 2:
+                return
+            a, b = sorted(self._mark_buffer[:2])
+            self._mark_buffer = []
+            if b > a:
+                self.add_window(a, b)
+            else:
+                self.update()
+
+        def _remove_window(self, event=None) -> None:
+            """Remove the window nearest the cursor on the current scope."""
+            x = getattr(event, "xdata", None)
+            if x is None:
+                return
+            slot = self._ann.get(self._current_key())
+            windows = slot["windows"] if slot else []
+            if not windows:
+                return
+            nearest = min(range(len(windows)), key=lambda i: abs(sum(windows[i]) / 2 - x))
+            windows.pop(nearest)
+            self.update()
+
         # -- overlays ---------------------------------------------------------
 
         def update(self, event=None) -> None:
             super().update(event)
+            self._label_axes()
             self._redraw_overlays()
+
+        def _label_axes(self) -> None:
+            ax = getattr(self, "_ax", None)
+            if ax is None:
+                return
+            mod = self._signals[self._current_idx].modality
+            ax.set_xlabel("time (s)")
+            ax.set_ylabel(f"{mod} ({_MODALITY_UNITS.get(mod, 'a.u.')})")
 
         def _redraw_overlays(self) -> None:
             ax = getattr(self, "_ax", None)

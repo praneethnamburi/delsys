@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-checked against the CSV's actual channel-number set, and under the
   default `channelmap_policy="strict"` a name-pick that doesn't match is flagged
   and skipped (vs `"lenient"` = pick the content-matching map + warn, or
-  `"name_only"`).
+  `"name_only"`). `progress=True` (default) prints a triage line, a per-file
+  `tqdm` progress bar, and a `built/hit/skipped/error` summary, surfacing
+  skips/errors as they occur. Adds a `tqdm` dependency.
 - **`delsys.read_channelmap(path)`** → `(sensor_map, sensor_name_replace)`.
   Channelmaps may now carry an optional `[sensor_name_replace]` section
   (`old = new` lines) holding acquisition-typo corrections alongside the map, so

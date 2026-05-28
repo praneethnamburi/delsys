@@ -172,6 +172,54 @@ def _gather_csvs(
     return sorted(set(out))
 
 
+def _process_one(
+    csv_path: str,
+    *,
+    channelmap: Optional[Union[str, List[SensorLog]]],
+    sensor_name_replace: Optional[Dict[str, str]],
+    channelmap_search_parents: int,
+    channelmap_policy: str,
+    skip_existing: bool,
+    overwrite: bool,
+) -> str:
+    """Convert one CSV; return its status string (no progress/reporting side effects)."""
+    from delsys.log import to_native_h5
+
+    out_h5 = os.path.splitext(csv_path)[0] + ".h5"
+    if skip_existing and os.path.exists(out_h5) and not overwrite:
+        return "hit"
+
+    if channelmap is not None:
+        sm: Optional[Union[str, List[SensorLog]]] = channelmap
+        nr = sensor_name_replace
+    else:
+        candidates = _find_channelmaps(csv_path, channelmap_search_parents)
+        if not candidates:
+            sm, nr = None, sensor_name_replace  # no map -> auto-build from CSV
+        else:
+            cm_path, status = _resolve_channelmap(
+                csv_path, candidates, channelmap_policy, sensor_name_replace
+            )
+            if cm_path is None:
+                return f"skipped: {status}"
+            sm, nr_map = read_channelmap(cm_path)
+            nr = sensor_name_replace if sensor_name_replace is not None else nr_map
+
+    try:
+        to_native_h5(csv_path, out_h5, sensor_map=sm, sensor_name_replace=nr)
+        return "built"
+    except Exception as e:  # keep the batch going; record the failure
+        return f"error: {type(e).__name__}: {e}"
+
+
+def _summary(results: Dict[str, str]) -> str:
+    """``built X | hit Y | skipped Z | error W`` over a results dict."""
+    from collections import Counter
+
+    c = Counter(v.split(":", 1)[0] for v in results.values())
+    return " | ".join(f"{k} {c.get(k, 0)}" for k in ("built", "hit", "skipped", "error"))
+
+
 def process(
     source: Union[str, Path, Iterable[Union[str, Path]]],
     *,
@@ -183,6 +231,7 @@ def process(
     skip_existing: bool = True,
     overwrite: bool = False,
     report: bool = True,
+    progress: bool = True,
 ) -> Dict[str, str]:
     """Batch-convert Delsys CSVs to native ``.h5`` checkpoints.
 
@@ -206,49 +255,64 @@ def process(
         skip_existing: Skip a CSV whose ``.h5`` already exists.
         overwrite: Rebuild even if the ``.h5`` exists.
         report: Write a ``delsys_process_report.txt`` per output folder.
+        progress: Print a triage line + a per-file progress bar (tqdm if available)
+            + a final summary, and surface skips/errors as they happen.
 
     Returns:
         ``{csv_path: status}`` where status is ``"built"``, ``"hit"`` (already
         existed), ``"skipped: <reason>"``, or ``"error: <msg>"``.
     """
-    from delsys.log import to_native_h5
-
     if channelmap_policy not in ("strict", "lenient", "name_only"):
         raise ValueError(
             f"channelmap_policy must be strict/lenient/name_only, got {channelmap_policy!r}"
         )
 
-    results: Dict[str, str] = {}
-    for csv_path in _gather_csvs(source, recursive):
-        out_h5 = os.path.splitext(csv_path)[0] + ".h5"
-        if skip_existing and os.path.exists(out_h5) and not overwrite:
-            results[csv_path] = "hit"
-            continue
-
-        # Resolve the channelmap (path or explicit) + corrections for this CSV.
-        if channelmap is not None:
-            sm: Optional[Union[str, List[SensorLog]]] = channelmap
-            nr = sensor_name_replace
+    csvs = _gather_csvs(source, recursive)
+    if progress:
+        if not csvs:
+            print(
+                f"delsys.process: no .csv files found under {source!r} "
+                f"(recursive={recursive}). Nothing to do.",
+                flush=True,
+            )
         else:
-            candidates = _find_channelmaps(csv_path, channelmap_search_parents)
-            if not candidates:
-                sm, nr = None, sensor_name_replace  # no map -> auto-build from CSV
-            else:
-                cm_path, status = _resolve_channelmap(
-                    csv_path, candidates, channelmap_policy, sensor_name_replace
-                )
-                if cm_path is None:
-                    results[csv_path] = f"skipped: {status}"
-                    continue
-                sm, nr_map = read_channelmap(cm_path)
-                nr = sensor_name_replace if sensor_name_replace is not None else nr_map
+            print(f"delsys.process: {len(csvs)} CSV(s) under {source!r}.", flush=True)
 
+    bar = None
+    if progress and csvs:
         try:
-            to_native_h5(csv_path, out_h5, sensor_map=sm, sensor_name_replace=nr)
-            results[csv_path] = "built"
-        except Exception as e:  # keep batch going; record the failure
-            results[csv_path] = f"error: {type(e).__name__}: {e}"
+            from tqdm.auto import tqdm
 
+            bar = tqdm(total=len(csvs), unit="file", leave=True)
+        except ImportError:
+            bar = None
+    emit = bar.write if bar is not None else (lambda m: print(m, flush=True))
+
+    results: Dict[str, str] = {}
+    try:
+        for csv_path in csvs:
+            if bar is not None:
+                bar.set_description(Path(csv_path).stem)
+            status = _process_one(
+                csv_path,
+                channelmap=channelmap,
+                sensor_name_replace=sensor_name_replace,
+                channelmap_search_parents=channelmap_search_parents,
+                channelmap_policy=channelmap_policy,
+                skip_existing=skip_existing,
+                overwrite=overwrite,
+            )
+            results[csv_path] = status
+            if progress and (status.startswith("skipped") or status.startswith("error")):
+                emit(f"  {Path(csv_path).name}: {status}")
+            if bar is not None:
+                bar.update(1)
+    finally:
+        if bar is not None:
+            bar.close()
+
+    if progress and csvs:
+        print(f"delsys.process: {_summary(results)}", flush=True)
     if report:
         _write_reports(results)
     return results

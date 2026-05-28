@@ -97,3 +97,14 @@ def test_read_channelmap_parses_corrections(tmp_path):
 def test_invalid_policy_rejected(tmp_path):
     with pytest.raises(ValueError):
         delsys.process(str(tmp_path), channelmap_policy="bogus")
+
+
+def test_progress_summary_and_silence(trial_csv, tmp_path, capsys):
+    csv, nums = trial_csv
+    _write_channelmap(tmp_path / "delsys_channelmap.txt", nums)
+    delsys.process(str(tmp_path), progress=True)
+    out = capsys.readouterr().out
+    assert "delsys.process:" in out and "built 1" in out
+
+    delsys.process(str(tmp_path), overwrite=True, progress=False)
+    assert capsys.readouterr().out == ""

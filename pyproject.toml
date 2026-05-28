@@ -30,6 +30,7 @@ dependencies = [
     "neurokit2",
     "pysampled>=1.2.0",
     "h5py",
+    "tqdm",
 ]
 
 [project.optional-dependencies]

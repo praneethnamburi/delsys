@@ -20,6 +20,7 @@ pytest.importorskip("datanavigator")
 import delsys  # noqa: E402
 from delsys._noise import (  # noqa: E402
     format_signal_key,
+    parse_key,
     read_noise_sidecar,
     sidecar_path_for,
     write_noise_sidecar,
@@ -129,3 +130,50 @@ def test_annotate_auto_limits_on_by_default(fixtures_dir, tmp_path):
     lf = _log(fixtures_dir, tmp_path)
     ann = lf.annotate_noise()
     assert ann.buttons["Auto limits"].state is True
+
+
+# ---------------------------------------------------------------------------
+# Sensor-centric view (PlotBrowser subclass; stacked modality subplots)
+# ---------------------------------------------------------------------------
+
+
+def test_sensor_view_marks_modality_window(fixtures_dir, tmp_path):
+    """Pressing '1' twice over a modality subplot adds a whole-modality window."""
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise(view="sensor")
+    ann._current_idx = 0
+    ann.update()  # build subplots / _subplot_axes for sensor 0
+    mod = next(iter(ann._subplot_axes))
+    ax = ann._subplot_axes[mod]
+    ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.02))
+    ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.05))
+
+    key = ann._modality_key_for(ann._sensors[0], mod)
+    doc = read_noise_sidecar(ann.save())
+    assert doc["signals"][key]["windows"] == [[0.02, 0.05]]
+    assert parse_key(key).coord is None  # whole-modality (coord-less) address
+
+
+def test_sensor_view_shares_sidecar_with_signal_view(fixtures_dir, tmp_path):
+    lf = _log(fixtures_dir, tmp_path)
+    assert (
+        lf.annotate_noise(view="signal")._sidecar_path
+        == lf.annotate_noise(view="sensor")._sidecar_path
+    )
+
+
+def test_sensor_view_dead_toggle(fixtures_dir, tmp_path):
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise(view="sensor")
+    ann._current_idx = 0
+    mod = next(iter(ann._subplot_axes))
+    ann._toggle_dead_at(SimpleNamespace(inaxes=ann._subplot_axes[mod], xdata=0.0))
+
+    key = ann._modality_key_for(ann._sensors[0], mod)
+    assert read_noise_sidecar(ann.save())["signals"][key]["dead"] == [[None, None]]
+
+
+def test_annotate_invalid_view_rejected(fixtures_dir, tmp_path):
+    lf = _log(fixtures_dir, tmp_path)
+    with pytest.raises(ValueError):
+        lf.annotate_noise(view="bogus")

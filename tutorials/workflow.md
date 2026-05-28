@@ -161,13 +161,26 @@ lf.annotate_noise()   # opens the annotator
 
 * The sidebar **dropdown** lists every signal by its structural key
   `"<sensor>.<modality>.<coord> | <location>"`; pick one (or arrow through them).
-* **Drag** across the trace to mark a noise window on the current signal.
+* **Hover** the cursor at the spot and press **`1`** to mark a window — two
+  presses fix its start and end; **`alt+1`** removes the window nearest the
+  cursor.
 * The **Mod scope** toggle records the window against the whole sensor+modality
   (coord-less key) instead of the single channel — for a bump that hits every
   axis; leave it off to mark one axis. ("We need both.")
 * **Toggle dead** marks the current scope dead for the whole recording (a dead
   electrode / FSR channel); **Undo window** drops the last window; **Save noise**
   writes the sidecar.
+
+For noise shared across a sensor's channels (a mechanical/cable artifact that
+hits EMG *and* ACC/GYRO together), the **sensor-centric** view stacks one
+sensor's modalities as time-aligned subplots:
+
+```python
+lf.annotate_noise(view="sensor")   # dropdown picks the sensor; 1 / alt+1 / d
+```
+
+Here `1`/`alt+1` mark the **hovered subplot's** whole sensor+modality and `d`
+toggles it dead. Both views write the same `<stem>.delsys-noise`.
 
 Marks land in a sibling `<stem>.delsys-noise` file (JSON; composite suffix so
 portfolio `*.json` tooling skips it), keyed by signal address:

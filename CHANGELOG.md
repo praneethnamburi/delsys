@@ -125,17 +125,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `<stem>.delsys-noise` when present (consumed before the cleaner; the resolved
     basename is frozen into the manifest as provenance). Consumption dispatches by
     suffix, so existing datanavigator-Event refs still work.
-- **`Log.annotate_noise()`** — interactive per-signal noise annotator
-  (`delsys.annotate`, a `datanavigator` `SignalBrowser` subclass; `datanavigator`
-  is imported lazily so the delsys core stays dnav-free). Browse the Log's signals
-  via the sidebar dropdown (labelled by structural key). Mark windows by hovering
-  the cursor and pressing **`1`** (two presses fix the window's start/end) and
-  **`alt+1`** to remove the nearest; a **Mod scope** toggle records against the
-  channel (coord-ful) or whole sensor+modality (coord-less); **Toggle dead** for a
-  dead channel; **Undo window**; **Save noise** writes the `<stem>.delsys-noise`
-  sidecar (auto-seeded from an existing one on open). Marked windows/dead spans
-  are shaded on the trace. Opens wide, auto-scaling, with labelled axes
-  (`time (s)` / `<modality> (<unit>)`). The annotator owns the sidecar read/write.
+- **`Log.annotate_noise(view=...)`** — interactive noise annotator
+  (`delsys.annotate`; `datanavigator` imported lazily so the delsys core stays
+  dnav-free). Two views onto the **same** `<stem>.delsys-noise` sidecar (shared
+  marking logic via `_NoiseMarkingMixin`). Common interaction: hover the cursor
+  and press **`1`** (two presses fix a window's start/end), **`alt+1`** to remove
+  the nearest; **Save noise** button (auto-seeded from an existing sidecar on
+  open). Marks are shaded on the trace; opens wide, auto-scaling, with labelled
+  axes (`time (s)` / `<modality> (<unit>)`).
+  - **`view="signal"`** (default) — `SignalBrowser` subclass: flip through every
+    channel via the dropdown; a **Mod scope** toggle records against the channel
+    (coord-ful) or whole sensor+modality (coord-less); **Toggle dead** / **Undo
+    window** buttons.
+  - **`view="sensor"`** — `PlotBrowser` subclass: one sensor's modalities
+    (EMG/ACC/GYRO/…) as stacked, time-aligned subplots, picked via the dropdown.
+    Marking targets the hovered subplot's whole sensor+modality; **`d`** toggles
+    that modality dead. Built for blips shared across a sensor's channels.
   (Interactive ICA cleaning from the same browser is a follow-up.)
 - `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
   `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop;

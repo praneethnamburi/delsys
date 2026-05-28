@@ -577,27 +577,31 @@ class Log:
     # EMG / EKG artifact cleaning
     # ------------------------------------------------------------------
 
-    def annotate_noise(self, path: Optional[str] = None):
-        """Open the interactive per-signal noise annotator over this Log.
+    def annotate_noise(self, path: Optional[str] = None, view: str = "signal"):
+        """Open an interactive noise annotator over this Log (see :mod:`delsys.annotate`).
 
-        Launches the delsys ``SignalBrowser`` subclass (see
-        :mod:`delsys.annotate`): browse the signals by their structural key,
-        drag-select noise windows / mark dead channels, and save them to a
-        ``<stem>.delsys-noise`` sidecar that :func:`delsys.clean` auto-consumes.
-
-        datanavigator is imported lazily here, so the delsys core stays
-        datanavigator-free until this method is called.
+        Mark noise windows / dead channels by hovering the cursor and pressing
+        ``1`` (two presses fix a window) / ``alt+1`` (remove nearest); they save
+        to a ``<stem>.delsys-noise`` sidecar that :func:`delsys.clean`
+        auto-consumes. datanavigator is imported lazily here, so the delsys core
+        stays datanavigator-free until this method is called.
 
         Args:
             path: Sidecar path to read/write. Defaults to a sibling
                 ``<stem>.delsys-noise`` of this Log's source file.
+            view: ``"signal"`` (default) — per-channel ``SignalBrowser``: flip
+                through channels via the dropdown, mark per channel or whole
+                sensor+modality (``Mod scope`` toggle). ``"sensor"`` — per-sensor
+                ``PlotBrowser``: one sensor's modalities (EMG/ACC/GYRO/…) as
+                stacked subplots, mark whole-modality windows (good for blips
+                shared across a sensor's channels).
 
         Returns:
-            The annotator instance (a ``SignalBrowser`` subclass).
+            The annotator instance (a ``datanavigator`` browser subclass).
         """
         from delsys.annotate import launch_noise_annotator
 
-        return launch_noise_annotator(self, path)
+        return launch_noise_annotator(self, path, view=view)
 
     def clean_emg_ekg_artifact(
         self,

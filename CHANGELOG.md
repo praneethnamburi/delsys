@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The embedded channelmap + canonical sensor order keep multi-sensor bundle
     columns in their `Log(csv)` order.
   - Adds an `h5py` dependency.
+- **`delsys.process(source)`** — batch CSV → `.h5` converter (mirrors
+  `telemed.process`): walks a path/folder/iterable, converts each CSV
+  idempotently (`skip_existing` / `overwrite`), and returns a `{path: status}`
+  dict (`"built"` / `"hit"` / `"skipped: ..."` / `"error: ..."`), writing a
+  per-folder `delsys_process_report.txt`. **Smart channelmap resolution**:
+  candidates are found in the CSV folder *and* parent folders
+  (`channelmap_search_parents`, default 1); the filename hint
+  (`delsys_channelmap_Trial_A_B.txt` for a trial range, else the default) is
+  cross-checked against the CSV's actual channel-number set, and under the
+  default `channelmap_policy="strict"` a name-pick that doesn't match is flagged
+  and skipped (vs `"lenient"` = pick the content-matching map + warn, or
+  `"name_only"`).
+- **`delsys.read_channelmap(path)`** → `(sensor_map, sensor_name_replace)`.
+  Channelmaps may now carry an optional `[sensor_name_replace]` section
+  (`old = new` lines) holding acquisition-typo corrections alongside the map, so
+  a single sidecar is self-describing; older readers ignore the section.
   - **EMGworks** is supported alongside Discover. Its time window depends on the
     requested `target_sr` (Discover's is `(0, duration)`), so the checkpoint stores
     the widest (`min_sr=1`) window plus the raw extent and *trims* on reload to

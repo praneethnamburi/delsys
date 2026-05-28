@@ -59,9 +59,13 @@ def _build_noise_annotator_class():
             self._spanselector = None
             # Must precede super().__init__: SignalBrowser.__init__ calls update(),
             # which our override extends to draw overlays from the state above.
+            # titlefunc shows the structural key (with location) -- the default
+            # falls back to "Plot number <i>" because a per-channel Signal has no
+            # ``name`` attribute.
             super().__init__(
                 plot_data=signals,
                 signal_names=self._keys,
+                titlefunc=lambda s: s._keys[s._current_idx],
                 figure_handle=figure_handle,
             )
             self._add_controls()

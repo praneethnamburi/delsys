@@ -35,6 +35,8 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pysampled
 
+from delsys._util import _trim_location
+
 #: Trial-id key as accepted by the public helpers.
 TrialId = Union[str, Sequence[int]]
 
@@ -301,13 +303,20 @@ def format_signal_key(sig, *, include_coord: bool = True) -> str:
 
     ``include_coord=False`` produces the whole-modality address (all
     sub-channels of the signal's sensor+modality).
+
+    The ``<label>`` is the sensor's body location via
+    :func:`delsys._util._trim_location` (the same source the modality bundles
+    use — e.g. ``"Tricep"``; ``"ch<number>"`` when no channelmap was loaded).
+    A per-channel :class:`Signal`'s own ``signal_names`` is a pysampled
+    placeholder (``"s0"``), so it is deliberately *not* used.
     """
-    names = getattr(sig, "signal_names", None) or [""]
+    sensor = sig.sensor
+    label = _trim_location(getattr(sensor, "location", None), sensor.number)
     return format_key(
-        sig.sensor.number,
+        sensor.number,
         sig.modality,
         sig.subchannel if include_coord else None,
-        names[0] if names else "",
+        label,
     )
 
 

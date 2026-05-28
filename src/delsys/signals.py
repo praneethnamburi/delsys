@@ -111,6 +111,28 @@ class Signal(pysampled.Data):
         """Shape of the underlying sample array (shortcut for ``self._sig.shape``)."""
         return self._sig.shape
 
+    def matches(
+        self,
+        sensor_number: int,
+        modality: str,
+        subchannel: Optional[str] = None,
+    ) -> bool:
+        """Whether this signal carries the given sensor number + modality (and,
+        when given, sub-channel).
+
+        ``subchannel=None`` matches any sub-channel of that sensor+modality (the
+        whole-modality address). This is the canonical signal-address predicate:
+        both :meth:`Log._splice_emg_back` (cleaned-column splice-back) and
+        :func:`delsys._noise.resolve_key` (sidecar-key resolution) route through
+        it instead of re-spelling the three-field equality.
+        """
+        sensor = self.sensor
+        if sensor is None or sensor.number != sensor_number:
+            return False
+        if self.modality != modality:
+            return False
+        return subchannel is None or self.subchannel == subchannel
+
 
 class IMU(pysampled.Data):
     """Tri-axial accelerometer or gyroscope bundle.

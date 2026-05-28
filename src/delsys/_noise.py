@@ -346,24 +346,16 @@ def format_signal_key(sig, *, include_coord: bool = True) -> str:
 def resolve_key(lf, key: str) -> List[int]:
     """Resolve a sidecar key to the matching indices in ``lf.signals``.
 
-    Reuses the sensor/modality/sub-channel matching that
+    Delegates to :meth:`delsys.signals.Signal.matches` — the same predicate
     :meth:`delsys.Log._splice_emg_back` uses: a signal matches when its
     ``sensor.number`` and ``modality`` equal the address, and — when the address
     carries a ``coord`` — its ``subchannel`` matches too. A coord-less key fans
     out to every sub-channel of that sensor+modality.
     """
     pk = parse_key(key)
-    out: List[int] = []
-    for i, sig in enumerate(lf.signals):
-        sensor = getattr(sig, "sensor", None)
-        if sensor is None or sensor.number != pk.sensor:
-            continue
-        if sig.modality != pk.modality:
-            continue
-        if pk.coord is not None and sig.subchannel != pk.coord:
-            continue
-        out.append(i)
-    return out
+    return [
+        i for i, sig in enumerate(lf.signals) if sig.matches(pk.sensor, pk.modality, pk.coord)
+    ]
 
 
 def _as_spans(seq) -> List[Tuple[Optional[float], Optional[float]]]:

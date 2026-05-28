@@ -29,6 +29,26 @@ def _const_columns(n_samples, n_channels):
 
 
 # ---------------------------------------------------------------------------
+# Signal.matches — the canonical signal-address predicate
+# ---------------------------------------------------------------------------
+
+
+def test_signal_matches():
+    si = _sensor_info({"EMGS", "ACC"}, number=3)
+    sig = Signal(
+        np.zeros(10),
+        sr=120.0,
+        t0=0.0,
+        meta={"sensor": si, "modality": "EMGS", "subchannel": "A"},
+    )
+    assert sig.matches(3, "EMGS", "A")
+    assert sig.matches(3, "EMGS")  # coord-less -> any sub-channel of sensor+modality
+    assert not sig.matches(3, "EMGS", "B")  # wrong sub-channel
+    assert not sig.matches(3, "ACC", "A")  # wrong modality
+    assert not sig.matches(4, "EMGS", "A")  # wrong sensor number
+
+
+# ---------------------------------------------------------------------------
 # IMU — three-axis access (X, Y, Z map to columns 0, 1, 2)
 # ---------------------------------------------------------------------------
 

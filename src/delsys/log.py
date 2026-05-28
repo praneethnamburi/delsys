@@ -889,12 +889,7 @@ class Log:
         for sensor, mod in emg_layout:
             for subchannel in SUBCHANNEL_MAP[mod]:
                 for i, sig in enumerate(self.signals):
-                    if (
-                        sig.sensor is not None
-                        and sig.sensor.number == sensor.number
-                        and sig.modality == mod
-                        and sig.subchannel == subchannel
-                    ):
+                    if sig.matches(sensor.number, mod, subchannel):
                         self.signals[i] = sig._clone(cleaned_2d[:, col])
                         break
                 col += 1

@@ -577,6 +577,28 @@ class Log:
     # EMG / EKG artifact cleaning
     # ------------------------------------------------------------------
 
+    def annotate_noise(self, path: Optional[str] = None):
+        """Open the interactive per-signal noise annotator over this Log.
+
+        Launches the delsys ``SignalBrowser`` subclass (see
+        :mod:`delsys.annotate`): browse the signals by their structural key,
+        drag-select noise windows / mark dead channels, and save them to a
+        ``<stem>.delsys-noise`` sidecar that :func:`delsys.clean` auto-consumes.
+
+        datanavigator is imported lazily here, so the delsys core stays
+        datanavigator-free until this method is called.
+
+        Args:
+            path: Sidecar path to read/write. Defaults to a sibling
+                ``<stem>.delsys-noise`` of this Log's source file.
+
+        Returns:
+            The annotator instance (a ``SignalBrowser`` subclass).
+        """
+        from delsys.annotate import launch_noise_annotator
+
+        return launch_noise_annotator(self, path)
+
     def clean_emg_ekg_artifact(
         self,
         *,

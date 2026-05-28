@@ -145,46 +145,79 @@ is no good and you don't want it regenerated or trusted, set `accept` to `false`
 `clean()` then skips it (`skipped: rejected`) even under `overwrite=True`, until
 you fix the decision and flip the flag back.
 
-## 4. Authoring noise masks in datanavigator, consuming them here
+## 4. Marking per-signal noise: `lf.annotate_noise()` → `.delsys-noise`
 
 Algorithmic cleaning handles ECG and motion artifact. Gross human-visible
-noise — a cable yank, a sensor reseat, a dropped-sample burst — is better marked
-by eye. Do that in `datanavigator`'s `SignalBrowser`: scrub the trial, mark the
-bad spans as a noise Event, and save it. The Event is plain JSON (a
-`[metadata, data]` list whose `data` maps each trial-id to `added` intervals in
-seconds) — `delsys` reads it directly, with **no** `datanavigator` dependency.
+noise — a cable yank, a sensor reseat, a dropped-sample burst, a dead electrode —
+is better marked by eye, **per signal**. `Log.annotate_noise()` opens an
+interactive browser (a `datanavigator` `SignalBrowser` subclass) over the Log's
+signals; `datanavigator` is imported lazily there, so the delsys core stays
+`datanavigator`-free until you call it:
 
-Point a trial at its noise Event by setting `noise_event_ref` in the manifest
-(`key` is the datanavigator trial-id tuple; a relative `path` resolves against
-the checkpoint's folder):
+```python
+lf = delsys.Log("Trial_5.h5")
+lf.annotate_noise()   # opens the annotator
+```
+
+* The sidebar **dropdown** lists every signal by its structural key
+  `"<sensor>.<modality>.<coord> | <location>"`; pick one (or arrow through them).
+* **Drag** across the trace to mark a noise window on the current signal.
+* The **Mod scope** toggle records the window against the whole sensor+modality
+  (coord-less key) instead of the single channel — for a bump that hits every
+  axis; leave it off to mark one axis. ("We need both.")
+* **Toggle dead** marks the current scope dead for the whole recording (a dead
+  electrode / FSR channel); **Undo window** drops the last window; **Save noise**
+  writes the sidecar.
+
+Marks land in a sibling `<stem>.delsys-noise` file (JSON; composite suffix so
+portfolio `*.json` tooling skips it), keyed by signal address:
 
 ```javascript
-"Trial_5": {
-  "ecg_components_to_remove": [3],
-  "noise_event_ref": {
-    "path": "event_noise_acc_bicep.json",
-    "key": "(2, 14, 17)"
-  },
-  ...
+// Trial_5.delsys-noise
+{
+  "schema": 1,
+  "signals": {
+    "3.EMGS.A | Tricep_L":  { "windows": [[1.0, 2.0]] },
+    "4.ACC | Bicep_R":      { "windows": [[5.2, 5.4]] },   // whole-modality
+    "9.FSR.C | LFoot_Ball": { "dead": [[12.4, null]] }      // dies at 12.4 s
+  }
 }
 ```
 
+`windows` are blanked to `NaN` and interpolated back; `dead` spans are
+zero-filled (a `null` endpoint is open — `[T, null]` = dead from `T` on,
+`[null, null]` = the whole recording). `delsys.clean` **auto-consumes** a sibling
+`.delsys-noise` (no manifest edit needed) and records it in the trial's
+`noise_event_ref` as provenance:
+
 ```python
 delsys.clean(folder, overwrite=True)
-# delsys_cleaning_report.txt:  Trial_5.h5 - cleaned (ecg=[3], splice=combined, noise_masked=16)
+# delsys_cleaning_report.txt:  Trial_5.h5 - cleaned (ecg=[3], splice=combined, noise_masked=4)
 ```
 
-The default policy is **NaN + interpolate**, applied modality-agnostically: a
-noise window is a wall-clock span, so every modality (EMG, ACC, …) gets the same
-treatment, and the masked-and-filled signals feed the artifact cleaner. To drive
-this directly (outside the batch):
+To drive masking directly (outside the batch):
 
 ```python
 from delsys import _noise
 
 lf = delsys.Log("Trial_5.h5")
+_noise.apply_noise_sidecar(lf, "Trial_5.delsys-noise")   # per-signal addresses
+```
+
+### Legacy: datanavigator noise Events (trial-keyed, flat intervals)
+
+The older path consumes a `datanavigator` noise **Event** file — plain JSON (a
+`[metadata, data]` list whose `data` maps each trial-id to `added` intervals in
+seconds), read directly with **no** `datanavigator` dependency, and applied
+modality-agnostically to every signal. It still works: set a manifest
+`noise_event_ref` to `{path, key}` (a `.json` path; `key` is the trial-id tuple)
+and `clean` dispatches by suffix.
+
+```python
+from delsys import _noise
+
 intervals = _noise.read_noise_intervals("event_noise_acc_bicep.json", (2, 14, 17))
-_noise.apply_noise_mask(lf, intervals)            # all modalities
+_noise.apply_noise_mask(lf, intervals)                       # all modalities
 _noise.apply_noise_mask(lf, intervals, modalities=["EMGS"])  # or restrict
 ```
 

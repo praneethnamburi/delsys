@@ -120,15 +120,17 @@ def write(lf, path):
 
 
 def read_into(lf, path, target_sr=None, clock_mul=1.0, t0=0.0):
-    """Populate an existing :class:`Log` instance ``lf`` from an HDF5 checkpoint.
+    """Populate ``lf`` from an HDF5 checkpoint's **metadata** and defer the signals.
 
-    Native signals are resampled to ``target_sr`` (with ``clock_mul`` scaling the
-    native rate); terminal snapshots are returned as stored. Arrays are upcast
-    ``float32 -> float64`` before resampling.
+    Only the cheap header (root attrs, channelmap, per-sensor metadata) is read here,
+    so constructing ``Log(".h5")`` is fast and holding many of them costs almost
+    nothing. The signal datasets are read on first access to ``sensors`` / ``signals``
+    / ``sr_orig`` (see :func:`hydrate` and ``Log.__getattr__``), at which point native
+    signals are resampled to ``target_sr`` (``clock_mul`` scaling the native rate) and
+    terminal snapshots returned as stored. Arrays upcast ``float32 -> float64`` before
+    resampling.
     """
     import h5py
-
-    from delsys.log import _normalize_signal_lengths
 
     if target_sr is None:
         target_sr = TARGET_SR
@@ -146,9 +148,9 @@ def read_into(lf, path, target_sr=None, clock_mul=1.0, t0=0.0):
         sensor_order = json.loads(f.attrs["sensor_order_json"])
 
         # EMGworks: the checkpoint stored signals on the widest (min_sr=1) window;
-        # trim back to the exact window this target_sr would produce so reload matches
-        # Log(csv, target_sr) bitwise. (The native interp grid is baked at clock_mul=1,
-        # so a clock-shifted reload can't be reproduced by reinterpretation.)
+        # the deferred read trims back to the exact window this target_sr would produce
+        # so reload matches Log(csv, target_sr) bitwise. (The native interp grid is
+        # baked at clock_mul=1, so a clock-shifted reload can't be reproduced.)
         window_mode = f.attrs["window_mode"] if "window_mode" in f.attrs else None
         emg_t_min = emg_t_max = None
         if window_mode == "emgworks":
@@ -195,7 +197,35 @@ def read_into(lf, path, target_sr=None, clock_mul=1.0, t0=0.0):
             )
             sens[si.number] = si
 
-        sr_orig, signals = [], []
+    # Stash what hydrate() needs; signal datasets stay on disk until first access.
+    lf._h5_deferred = {
+        "path": path,
+        "sensor_order": sensor_order,
+        "sensors_info": sens,
+        "emg_t_min": emg_t_min,
+        "emg_t_max": emg_t_max,
+    }
+    return lf
+
+
+def hydrate(lf):
+    """Read the deferred signal datasets and build ``signals`` / ``sensors`` / ``sr_orig``.
+
+    Idempotent: a no-op once hydrated (or for CSV-loaded Logs that were never deferred).
+    """
+    import h5py
+
+    from delsys.log import _normalize_signal_lengths
+
+    d = lf.__dict__.pop("_h5_deferred", None)
+    if d is None:
+        return lf
+    sens = d["sensors_info"]
+    emg_t_min, emg_t_max = d["emg_t_min"], d["emg_t_max"]
+    target_sr = lf.target_sr
+
+    sr_orig, signals = [], []
+    with h5py.File(d["path"], "r") as f:
         sg = f["signals"]
         for k in sorted(sg, key=int):
             g = sg[k]
@@ -230,6 +260,6 @@ def read_into(lf, path, target_sr=None, clock_mul=1.0, t0=0.0):
 
     lf.sr_orig = sr_orig
     lf.signals = _normalize_signal_lengths(signals)
-    lf.sensors = lf._signals_to_sensors([sens[n] for n in sensor_order], lf.signals)
+    lf.sensors = lf._signals_to_sensors([sens[n] for n in d["sensor_order"]], lf.signals)
     lf.sensor_groups = {}
     return lf

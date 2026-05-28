@@ -215,6 +215,22 @@ class Log:
         self.sensors: List[Sensor] = self._signals_to_sensors(sensors_info, self.signals)
         self.sensor_groups: Dict[str, Sequence[int]] = {}
 
+    #: Attributes whose first access hydrates a lazily-loaded HDF5 checkpoint
+    #: (see :func:`delsys._hdf5.read_into`). Everything signal-derived flows through
+    #: ``sensors`` (the bundle properties, ``find``, ``__getitem__``), so this set is
+    #: the complete trigger surface.
+    _H5_LAZY_ATTRS = ("sensors", "signals", "sr_orig", "sensor_groups")
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached when normal lookup misses. For a Log built from an HDF5
+        # checkpoint, the signal datasets are read on the first such access.
+        if name in Log._H5_LAZY_ATTRS and "_h5_deferred" in self.__dict__:
+            from delsys import _hdf5
+
+            _hdf5.hydrate(self)
+            return self.__dict__[name]
+        raise AttributeError(name)
+
     def to_hdf5(self, path: str) -> str:
         """Write this ``Log`` to a self-contained HDF5 checkpoint.
 

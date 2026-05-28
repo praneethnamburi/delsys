@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     link devices (VO2/HR/SmO2/Thb) are written as terminal snapshots. `clock_mul`
     and `t0` are *not* baked in — alignment to another clock is a load-time
     argument, so one checkpoint serves any target rate / clock without re-export.
+  - **Lazy load.** `Log(".h5")` reads only the header (root attrs, channelmap,
+    per-sensor metadata) at construction — cheap enough that `{id: Log(...)}`
+    dicts over a whole study cost almost nothing. The signal datasets are read +
+    resampled on first access to `sensors` / `signals` / `sr_orig` (and therefore
+    the bundle properties / `find` / `__getitem__`), via `Log.__getattr__`.
   - **`float32` + `lzf`**, lossless vs the CSV's ~7 significant figures; the
     reader upcasts to `float64` before any resampling, so no downstream numeric
     work (filters, ICA) runs in single precision. Round-trips bitwise (within

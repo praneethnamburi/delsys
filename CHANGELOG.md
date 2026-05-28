@@ -136,11 +136,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the trace. The annotator owns the sidecar read/write. (Interactive ICA cleaning
   from the same browser is a follow-up.)
 - `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
-  `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop
-  and authoring noise masks in `datanavigator`'s `SignalBrowser`.
+  `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop;
+  section 4 now leads with `lf.annotate_noise()` + the `.delsys-noise` sidecar
+  (the datanavigator-Event path kept as legacy).
 
 ### Changed
 
+- **Bundle `signal_names` keep the full body-location name.** `_trim_location`
+  now keeps everything *before* the `(...)` parenthetical (dropping only the
+  parenthetical — the FSR/Quattro position map or an EMG alt-name) instead of
+  only the first whitespace token. Single-word camelCase locations (e.g.
+  `LBrachialis`) are unchanged; multi-word/spaced placements (plausible in
+  bilateral layouts) are now preserved (`"L Big Toe"` → `LBigToe`, previously
+  `L`). The leading `L`/`R`/`C` side marker was always part of the location and
+  is still kept. `delsys._noise.format_signal_key` builds its sidecar `<label>`
+  from the same per-channel bundle name (`Sensor._make_bundle_labels`), so an
+  annotator key reads e.g. `9.FSR.C | LFoot_Ball`.
 - `_parse_dataframe_emgworks` now accepts per-modality `target_sr=None`
   (preserve-native), needed by the HDF5 checkpoint's native export. The
   channel-grid window still snaps to the coarsest *requested* rate exactly as

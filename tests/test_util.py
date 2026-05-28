@@ -103,12 +103,18 @@ def test_trim_location_strips_parenthetical():
     assert _trim_location("LFoot (1-Heel, 2-OuterEdge, 3-Ball, 4-Toe)", 5) == "LFoot"
 
 
-def test_trim_location_keeps_first_token_only():
+def test_trim_location_drops_parenthetical_keeps_full_name():
+    # The (...) parenthetical (FSR/Quattro position map or EMG alt-name) is
+    # dropped, but the full body-location name before it is kept -- including
+    # multi-word/spaced placements (collapsed to alphanumerics), which the old
+    # first-token-only behavior would have truncated.
     assert _trim_location("LPinkyReach (LPalmaris Longus)", 5) == "LPinkyReach"
+    assert _trim_location("RLowerLeg (A-MedialGastroc, B-Lat)", 20) == "RLowerLeg"
+    assert _trim_location("L Big Toe", 5) == "LBigToe"  # spaced -> kept (was "L")
 
 
 def test_trim_location_canonicalises_special_chars():
-    # `_trim_location` runs the first whitespace-token through `_canonical_label`.
+    # `_trim_location` runs the pre-parenthetical text through `_canonical_label`.
     assert _trim_location("L-Foo!", 5) == "LFoo"
 
 

@@ -18,9 +18,7 @@ pytest.importorskip("datanavigator")
 
 import delsys  # noqa: E402
 from delsys._noise import (  # noqa: E402
-    format_key,
     format_signal_key,
-    parse_key,
     read_noise_sidecar,
     sidecar_path_for,
     write_noise_sidecar,
@@ -54,8 +52,8 @@ def test_annotate_mod_scope_writes_coordless_key(fixtures_dir, tmp_path):
     ann.add_window(0.10, 0.12)
 
     doc = read_noise_sidecar(ann.save())
-    pk = parse_key(format_signal_key(lf.signals[0]))
-    mod_key = format_key(pk.sensor, pk.modality, None, pk.label)
+    # Whole-modality key = coord-less address, labelled with the body location.
+    mod_key = format_signal_key(lf.signals[0], include_coord=False)
     assert doc["signals"][mod_key]["windows"] == [[0.10, 0.12]]
 
 

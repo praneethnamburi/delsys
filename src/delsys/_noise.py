@@ -298,20 +298,43 @@ def format_key(
     return f"{addr} | {label}" if label else addr
 
 
+def _signal_label(sig) -> str:
+    """Full per-channel display name for a Signal, matching the modality
+    bundle's ``signal_names`` (side + body location + FSR/Quattro position).
+
+    Reuses :meth:`delsys.sensor.Sensor._make_bundle_labels` so the label is
+    byte-identical to what ``lf.<modality>.signal_names`` shows: single-name
+    modalities (EMGS/EKG/ACC/GYRO) resolve to the trimmed location; multi-name
+    modalities (EMGD/EMGQ/FSR) resolve to the per-sub-channel name (e.g.
+    ``"LFoot_Ball"`` for FSR sub-channel ``C``).
+    """
+    from delsys._constants import SUBCHANNEL_MAP
+    from delsys.sensor import Sensor
+
+    keys = SUBCHANNEL_MAP.get(sig.modality, (sig.subchannel,))
+    names, _ = Sensor._make_bundle_labels(sig.modality, sig.sensor, len(keys))
+    if len(names) == len(keys) and sig.subchannel in keys:
+        return names[keys.index(sig.subchannel)]
+    return names[0] if names else ""
+
+
 def format_signal_key(sig, *, include_coord: bool = True) -> str:
     """Build the sidecar key addressing a single :class:`delsys.signals.Signal`.
 
-    ``include_coord=False`` produces the whole-modality address (all
-    sub-channels of the signal's sensor+modality).
+    With ``include_coord=True`` (default) the ``<label>`` is the full
+    per-channel name from :func:`_signal_label` (matching the modality bundle's
+    ``signal_names``). ``include_coord=False`` produces the whole-modality
+    address (all sub-channels of the sensor+modality), labelled with just the
+    trimmed body location via :func:`delsys._util._trim_location`.
 
-    The ``<label>`` is the sensor's body location via
-    :func:`delsys._util._trim_location` (the same source the modality bundles
-    use — e.g. ``"Tricep"``; ``"ch<number>"`` when no channelmap was loaded).
     A per-channel :class:`Signal`'s own ``signal_names`` is a pysampled
     placeholder (``"s0"``), so it is deliberately *not* used.
     """
     sensor = sig.sensor
-    label = _trim_location(getattr(sensor, "location", None), sensor.number)
+    if include_coord:
+        label = _signal_label(sig)
+    else:
+        label = _trim_location(getattr(sensor, "location", None), sensor.number)
     return format_key(
         sensor.number,
         sig.modality,

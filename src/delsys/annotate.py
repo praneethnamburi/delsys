@@ -50,9 +50,9 @@ def _build_noise_annotator_class():
         def __init__(self, lf, path: Optional[str] = None, figure_handle=None) -> None:
             self._lf = lf
             self._sidecar_path = path or _noise.sidecar_path_for(lf.fname)
-            signals = list(lf.signals)
+            self._signals = list(lf.signals)
             # Dropdown labels = the coord-ful signal address for each channel.
-            self._keys: List[str] = [_noise.format_signal_key(s) for s in signals]
+            self._keys: List[str] = [_noise.format_signal_key(s) for s in self._signals]
             # In-memory annotation: {key: {"windows": [[a,b],...], "dead": [...]}}.
             self._ann: Dict[str, dict] = self._load_existing()
             self._overlay_artists: list = []
@@ -63,7 +63,7 @@ def _build_noise_annotator_class():
             # falls back to "Plot number <i>" because a per-channel Signal has no
             # ``name`` attribute.
             super().__init__(
-                plot_data=signals,
+                plot_data=self._signals,
                 signal_names=self._keys,
                 titlefunc=lambda s: s._keys[s._current_idx],
                 figure_handle=figure_handle,
@@ -95,10 +95,15 @@ def _build_noise_annotator_class():
             """Coord-ful key of the currently displayed channel."""
             return self._keys[self._current_idx]
 
-        def _modality_key(self, channel_key: Optional[str] = None) -> str:
-            """Coord-less (whole sensor+modality) key for a channel key."""
-            pk = _noise.parse_key(channel_key or self._channel_key())
-            return _noise.format_key(pk.sensor, pk.modality, None, pk.label)
+        def _modality_key(self) -> str:
+            """Coord-less (whole sensor+modality) key for the current signal.
+
+            Labelled with the trimmed body location (not the per-channel name),
+            since the window applies to every sub-channel of the modality.
+            """
+            return _noise.format_signal_key(
+                self._signals[self._current_idx], include_coord=False
+            )
 
         def _current_key(self) -> str:
             """Key the current marking targets, per the scope toggle."""
@@ -176,7 +181,7 @@ def _build_noise_annotator_class():
             self._overlay_artists = []
 
             ch_key = self._channel_key()
-            mod_key = self._modality_key(ch_key)
+            mod_key = self._modality_key()
             x0, x1 = ax.get_xlim()
             # Channel-scoped windows (red) + whole-modality windows (orange) both
             # affect the displayed channel; dead spans are hatched gray.

@@ -84,10 +84,18 @@ def _canonical_label(s: str) -> str:
 def _trim_location(location: Optional[str], sensor_number: int) -> str:
     """Reduce a channelmap ``location`` to a short, sanitized label.
 
-    Takes the first whitespace-delimited token of ``location`` and runs it
-    through :func:`_canonical_label`. When ``location`` is ``None`` (i.e. no
-    channelmap was supplied), falls back to ``f"ch{sensor_number}"`` so each
-    sensor still has a unique, readable identifier.
+    Keeps the full body-location name (the part *before* any ``(...)``
+    parenthetical) and runs it through :func:`_canonical_label`. The
+    parenthetical is dropped because it carries the FSR/Quattro per-channel
+    position map (handled separately by :func:`_parse_fsr_quattro_positions`)
+    or an EMG alternative name; the primary name — including the leading
+    ``L``/``R``/``C`` side marker and any multi-word body part — is preserved.
+    When ``location`` is ``None`` (no channelmap), falls back to
+    ``f"ch{sensor_number}"`` so each sensor still has a unique label.
+
+    (Pre-0.5.0 this took only the first whitespace token, which collapsed a
+    multi-word location to its first word — fine for single-word camelCase
+    labels but lossy for spaced bilateral placements.)
 
     Args:
         location: ``SensorLog.location`` from the channelmap, or ``None``.
@@ -95,12 +103,13 @@ def _trim_location(location: Optional[str], sensor_number: int) -> str:
             fallback only.
 
     Returns:
-        Alphanumeric-only short label (e.g. ``"LFoot"``, ``"ch5"``).
+        Alphanumeric-only label (e.g. ``"LFoot"``, ``"RVastusMedialis"``,
+        ``"ch5"``).
     """
     if location is None:
         return f"ch{sensor_number}"
-    first_token = location.split(" ", 1)[0]
-    return _canonical_label(first_token)
+    pre_parenthetical = location.split("(", 1)[0]
+    return _canonical_label(pre_parenthetical)
 
 
 def _parse_fsr_quattro_positions(

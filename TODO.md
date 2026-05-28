@@ -64,6 +64,14 @@ To regenerate this snapshot::
   once pysampled ships those classmethods (deferred from pysampled
   1.2.0). Status check: pysampled 1.2.0 explicitly pulled them
   before release; revisit when pysampled 1.3.0 plans firm up.
+- **In-log noise marking + per-log sidecar + SignalBrowser (target 0.5.0).**
+  Designed — see [`.claude-prompts/plan-0.5.0-noise-marking-signalbrowser.md`](.claude-prompts/plan-0.5.0-noise-marking-signalbrowser.md).
+  `lf.annotate_noise()` opens a delsys subclass of datanavigator's `SignalBrowser`
+  (with a new signal dropdown) to mark noise per signal and drive interactive
+  cleaning; windows persist to a per-log `<stem>.delsys-noise` sidecar keyed by
+  `"<sensor>.<modality>[.<coord>] | <label>"`; the per-folder
+  `delsys_cleaning.json` `noise_event_ref` points at it. Phased: (A) dnav sidebar
+  dropdown, (B) delsys sidecar data layer, (C) the subclass + `annotate_noise`.
 - **Batch cleaning (`delsys.clean`) follow-ups** (the batch/manifest/docs layer
   shipped in `_clean.py` + `_noise.py` — see CHANGELOG `[Unreleased]`):
   - **Noise-mask consumption — full implementation.** v1 wires the hook: a

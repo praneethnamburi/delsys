@@ -10,7 +10,7 @@ trial, and end up with analysis-ready `*_cleaned.h5` files plus a reviewable,
 Trial_5.csv ──process()──▶ Trial_5.h5 ──clean()──▶ Trial_5_cleaned.h5
                            (raw, native rate)        (cleaned snapshot)
                                                      + Trial_5_cleaning_report.pdf
-                                                     + delsys_cleaning.json  (decisions)
+                                                     + Trial_5.delsys-artifact  (decision)
 ```
 
 Two kinds of cleaning show up here, and they have **separate owners**:
@@ -58,86 +58,98 @@ Each trial produces three things next to its checkpoint:
 * `Trial_5_cleaning_report.pdf` — the per-trial report (IC ↔ EKG diagnostics,
   ranked attenuation table, per-channel before/after). The report path anchors
   on the checkpoint, so it lands right beside it.
-* an entry in `delsys_cleaning.json` — the **decisions manifest** (next section).
+* a `Trial_5.delsys-artifact` — the **decision sidecar** (next section).
 
 `clean` is idempotent: a trial whose `*_cleaned.h5` already exists is a `hit`.
 Pass `overwrite=True` to force a re-run (you'll do this after editing the
-manifest).
+sidecar).
 
-## 3. The decisions manifest — `cleaned.h5 = f(raw.h5, manifest)`
+## 3. The decision sidecar — `cleaned.h5 = f(raw.h5, .delsys-artifact)`
 
 The raw checkpoint is immutable. Everything that turns it into a *particular*
 cleaned output — the ICA components removed, which cleaned variant was spliced,
-the motion pairing, any noise-event reference, and the rest of the
-[`CleaningConfig`](api.md) knobs — lives in a per-folder `delsys_cleaning.json`
-keyed by trial id (the checkpoint stem):
+the motion pairing, any noise reference, and the rest of the
+[`CleaningConfig`](api.md) knobs — lives in a sibling `<stem>.delsys-artifact`
+sidecar that travels with the checkpoint (the same per-log model as
+`<stem>.delsys-noise`):
 
 ```javascript
 {
   "schema": 1,
-  "trials": {
-    "Trial_5": {
-      // ICA component indices to zero out; [] removes none.
-      "ecg_components_to_remove": [3],
-      // Which cleaned variant to splice back: "combined" | "ekgonly" | "motiononly".
-      "splice_source": "combined",
-      // ACC pairing: "auto" | null (skip motion stage) | {emg_sensor: acc_sensor_or_location}.
-      "motion": "auto",
-      // Noise windows: null | {"path": "<event>.json", "key": "(2, 14, 17)"}.
-      "noise_event_ref": null,
-      // Review status: null (unreviewed) | true (approved) | false (blocks regen).
-      "accept": null,
-      // Any CleaningConfig knob; omitted ones fall back to the dataclass default.
-      "config": {
-        "preprocess_highpass_hz": 20.0,  // float Hz | null (skip the high-pass)
-        "use_ecg_stage": true,           // true | false (skip ICA + EKG regression)
-        "use_motion_stage": true,        // true | false (skip ACC regression)
-        "min_variance_ratio": 0.1,       // 0..1 safety gate (higher = reject more motion cleaning)
-        "...": "..."                     // see the CleaningConfig docstring for the full set
-      }
+  "cleaning": {
+    // ICA component indices to zero out; [] removes none.
+    "ecg_components_to_remove": [3],
+    // Which cleaned variant to splice back: "combined" | "ekgonly" | "motiononly".
+    "splice_source": "combined",
+    // ACC pairing: "auto" | null (skip motion stage) | {emg_sensor: acc_sensor_or_location}.
+    "motion": "auto",
+    // Noise windows: null | "<stem>.delsys-noise" | {"path": "<event>.json", "key": "(2, 14, 17)"}.
+    "noise_event_ref": null,
+    // Review status: null (unreviewed) | true (approved) | false (blocks regen).
+    "accept": null,
+    // Any CleaningConfig knob; omitted ones fall back to the dataclass default.
+    "config": {
+      "preprocess_highpass_hz": 20.0,  // float Hz | null (skip the high-pass)
+      "use_ecg_stage": true,           // true | false (skip ICA + EKG regression)
+      "use_motion_stage": true,        // true | false (skip ACC regression)
+      "min_variance_ratio": 0.1,       // 0..1 safety gate (higher = reject more motion cleaning)
+      "...": "..."                     // see the CleaningConfig docstring for the full set
     }
   }
 }
 ```
 
 The full set of `config` knobs (and their defaults) is the
-[`CleaningConfig`](api.md) dataclass.
+[`CleaningConfig`](api.md) dataclass. A per-folder `delsys_cleaning_report.txt`
+summarizes a run (an overview, not the source of truth).
 
-On the **first** pass, a trial with no manifest entry is cleaned with
-auto-detection on, and its *resolved* decision is frozen into the manifest. On a
+On the **first** pass, a trial with no sidecar is cleaned with
+auto-detection on, and its *resolved* decision is frozen into a fresh sidecar. On a
 **later** pass, the frozen decision is replayed (auto-detection off, the recorded
 components applied verbatim). Because the FastICA fit is seeded, replaying the
 auto-chosen components reconstructs the same signal — a re-run reproduces the
 cleaned checkpoint bit-for-bit. That is the reproducibility contract:
 
 ```python
-delsys.clean(folder)                  # first pass: auto + freeze manifest
+delsys.clean(folder)                  # first pass: auto + freeze the sidecars
 delsys.clean(folder, overwrite=True)  # replay: byte-identical cleaned.h5
 ```
 
 ### The edit / re-run loop
 
 Open `Trial_5_cleaning_report.pdf`. If the auto-detected IC looks wrong (page 1
-ranks each IC by its correlation with the EKG), pick a better one with
-`review_components` — see the
-[cleaning tutorial](cleaning_emg_ekg_artifact.md) — then edit the manifest and
-re-run:
+ranks each IC by its correlation with the EKG), the easiest fix is the
+interactive reviewer — it picks components, previews the result, and writes the
+decision sidecar for you:
+
+```python
+delsys.Log("Trial_5.h5").clean()      # click ICs, pick splice, Save
+delsys.clean(folder, overwrite=True)  # regenerate from the saved decision
+```
+
+`lf.clean()`'s **Save** writes the decision into `Trial_5.delsys-artifact`
+and clears the stale `Trial_5_cleaned.h5`, so the re-run regenerates from it (see
+the [cleaning tutorial](cleaning_emg_ekg_artifact.md)). You can also hand-edit the
+sidecar directly — change the component or the spliced variant — and re-run:
 
 ```javascript
-// delsys_cleaning.json — change the component, or the spliced variant
-"Trial_5": {
-  "ecg_components_to_remove": [5],        // was [3]
-  "splice_source": "ekgonly",            // skip an over-aggressive motion stage
-  ...
+// Trial_5.delsys-artifact — change the component, or the spliced variant
+{
+  "schema": 1,
+  "cleaning": {
+    "ecg_components_to_remove": [5],     // was [3]
+    "splice_source": "ekgonly",          // skip an over-aggressive motion stage
+    "...": "..."
+  }
 }
 ```
 
 ```python
-delsys.clean(folder, overwrite=True)   # regenerates Trial_5 from the edited entry
+delsys.clean(folder, overwrite=True)   # regenerates Trial_5 from the edited sidecar
 ```
 
-Only the trials you touched change; an unedited entry replays unchanged. The
-`config` you pass to `clean()` is the *base* for trials that have **no** entry
+Only the trials you touched change; an unedited sidecar replays unchanged. The
+`config` you pass to `clean()` is the *base* for trials that have **no** sidecar
 yet — it never overrides an existing decision (that would break reproducibility).
 
 `accept` tracks review status (`null` = not yet reviewed). If a trial's cleaning

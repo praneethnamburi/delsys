@@ -17,7 +17,7 @@ import neurokit2 as nk  # noqa: E402
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 
-from delsys import CleaningConfig, CleaningResult, Log  # noqa: E402
+from delsys import CleaningConfig, CleaningResult, CleaningSession, Log  # noqa: E402
 from delsys.cleaning import (  # noqa: E402
     auto_select_ekg_components,
     fit_ica,
@@ -589,73 +589,6 @@ def test_log_clean_auto_report_locked_fails_fast(fixtures_dir, tmp_path, monkeyp
     np.testing.assert_array_equal(lf.emg(), raw_before)
 
 
-def test_review_constructs_and_keys_advance_channel(fixtures_dir, tmp_path):
-    """``review()`` builds a figure and the key handler advances the channel index."""
-    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
-    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
-
-    plt.close("all")
-    result.review()
-    fig = plt.gcf()
-    state = fig._delsys_review_state
-    assert state["idx"] == 0
-    n = len(state["order"])
-    assert n == result.cleaned_emg.shape[1]
-
-    class _Ev:
-        pass
-
-    ev = _Ev()
-    ev.key = "right"
-    state["_on_key"](ev)
-    assert state["idx"] == 1
-    ev.key = "right"
-    state["_on_key"](ev)
-    assert state["idx"] == 2
-    ev.key = "left"
-    state["_on_key"](ev)
-    assert state["idx"] == 1
-    ev.key = "end"
-    state["_on_key"](ev)
-    assert state["idx"] == n - 1
-    ev.key = "home"
-    state["_on_key"](ev)
-    assert state["idx"] == 0
-    # Wrap on previous from 0.
-    ev.key = "left"
-    state["_on_key"](ev)
-    assert state["idx"] == n - 1
-
-    # Overlay toggles.
-    assert state["show_ekgonly"] is True
-    ev.key = "e"
-    state["_on_key"](ev)
-    assert state["show_ekgonly"] is False
-    # 'o' folds all-on / all-off: if any are on, turn them all off.
-    ev.key = "o"
-    state["_on_key"](ev)
-    assert state["show_ekgonly"] is False
-    assert state["show_motiononly"] is False
-    assert state["show_cleaned"] is False
-    # second 'o' flips them all back on.
-    ev.key = "o"
-    state["_on_key"](ev)
-    assert state["show_ekgonly"] is True
-    assert state["show_motiononly"] is True
-    assert state["show_cleaned"] is True
-    plt.close("all")
-
-
-def test_review_channels_arg_restricts_order(fixtures_dir, tmp_path):
-    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
-    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
-
-    plt.close("all")
-    result.review(channels=[3, 0, 1])
-    state = plt.gcf()._delsys_review_state
-    assert state["order"] == [3, 0, 1]
-    plt.close("all")
-
 
 # ---------------------------------------------------------------------------
 # 0.4.x — diagnostics page, components viewer, splice_source
@@ -728,70 +661,6 @@ def test_pdf_page_count_includes_diagnostics_page(fixtures_dir, tmp_path):
     assert n_pages == 2 + n_emg, f"got {n_pages} pages; expected {2 + n_emg}"
 
 
-def test_review_components_constructs_and_keys_advance(fixtures_dir, tmp_path):
-    """``review_components()`` builds a 4-panel viewer and the key
-    handler advances the IC index."""
-    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
-    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
-    assert result.ica is not None
-
-    plt.close("all")
-    result.review_components()
-    fig = plt.gcf()
-    state = fig._delsys_components_state
-    assert state["idx"] == 0
-    n = len(state["order"])
-    assert n == result.ica.sources.shape[1]
-
-    class _Ev:
-        pass
-
-    ev = _Ev()
-    ev.key = "right"
-    state["_on_key"](ev)
-    assert state["idx"] == 1
-    ev.key = "right"
-    state["_on_key"](ev)
-    assert state["idx"] == 2
-    ev.key = "left"
-    state["_on_key"](ev)
-    assert state["idx"] == 1
-    ev.key = "end"
-    state["_on_key"](ev)
-    assert state["idx"] == n - 1
-    ev.key = "home"
-    state["_on_key"](ev)
-    assert state["idx"] == 0
-    # Wrap on previous from 0.
-    ev.key = "left"
-    state["_on_key"](ev)
-    assert state["idx"] == n - 1
-    plt.close("all")
-
-
-def test_review_components_components_arg_restricts(fixtures_dir, tmp_path):
-    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
-    result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
-
-    plt.close("all")
-    result.review_components(components=[2, 0])
-    state = plt.gcf()._delsys_components_state
-    assert state["order"] == [2, 0]
-    plt.close("all")
-
-
-def test_review_components_raises_when_ecg_skipped():
-    """``review_components`` raises when the ICA result is missing."""
-    rng = np.random.default_rng(103)
-    sr = 200.0
-    n = int(sr * 2)
-    emg = rng.standard_normal((n, 2))
-    cfg = CleaningConfig(use_ecg_stage=False, use_motion_stage=False)
-    result = run_pipeline(emg, sr=sr, ekg_1d=None, config=cfg)
-    with pytest.raises(ValueError):
-        result.review_components()
-
-
 def test_log_clean_splice_source_ekgonly(fixtures_dir, tmp_path):
     """``splice_source='ekgonly'`` makes ``lf.emg`` match ``cleaned_emg_ekgonly``."""
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)
@@ -828,3 +697,89 @@ def test_log_clean_splice_source_unknown_raises(fixtures_dir, tmp_path):
     lf = _load(fixtures_dir, "discover170.csv", tmp_path)
     with pytest.raises(ValueError):
         lf.clean_emg_ekg_artifact(splice_source="bogus", generate_report=False)
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 — CleaningSession (fit-once interactive recompute core)
+# ---------------------------------------------------------------------------
+
+
+def test_session_n_components_and_auto_match_log_path(fixtures_dir, tmp_path):
+    """``from_log`` fits the same ICA the Log path does: ``n_components`` =
+    n_emg + 1, and ``auto_components()`` equals the auto-detected set a
+    motion-free ``clean_emg_ekg_artifact`` resolves."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    session = CleaningSession.from_log(lf)
+
+    n_emg = lf.emg().shape[1]
+    assert session.n_components == n_emg + 1  # EKG appended
+    assert session.ica is not None
+
+    # Compare against the Log path with motion off (so both harmonize EMG+EKG
+    # only → identical sample count → identical ICA fit).
+    ref = lf.clean_emg_ekg_artifact(motion=None, in_place=False, generate_report=False)
+    assert session.auto_components() == ref.diagnostics["ecg"]["components_removed"]
+
+
+def test_session_recompute_matches_log_ecg_path(fixtures_dir, tmp_path):
+    """Recomputing with the auto set (motion off) reproduces the Log path's
+    cleaned EMG bit-for-bit — the fit-once core is faithful."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    ref = lf.clean_emg_ekg_artifact(motion=None, in_place=False, generate_report=False)
+
+    session = CleaningSession.from_log(lf)
+    result = session.recompute(session.auto_components(), motion=None)
+
+    assert result.cleaned_emg.shape == ref.cleaned_emg.shape
+    np.testing.assert_allclose(result.cleaned_emg, ref.cleaned_emg, rtol=1e-6, atol=1e-8)
+    assert result.diagnostics["motion"]["used"] is False
+    assert result.fname == lf.fname
+
+
+def test_session_reuses_one_ica_fit_across_recomputes(fixtures_dir, tmp_path):
+    """Toggling the removal set never refits: the ICA object is identical and
+    different removal sets give different cleaned output."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    session = CleaningSession.from_log(lf)
+    ica_before = session.ica
+
+    none_removed = session.recompute([], motion=None)
+    auto_removed = session.recompute(session.auto_components(), motion=None)
+
+    assert session.ica is ica_before  # same fitted object, no refit
+    assert not np.allclose(none_removed.cleaned_emg, auto_removed.cleaned_emg)
+
+
+def test_session_motion_pairing_changes_output(fixtures_dir, tmp_path):
+    """Turning the motion stage on (auto pairing) changes the cleaned EMG vs
+    motion off — the re-paired ACC predictor is actually applied."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    session = CleaningSession.from_log(lf)
+    auto = session.auto_components()
+
+    no_motion = session.recompute(auto, motion=None)
+    with_motion = session.recompute(auto, motion="auto")
+
+    assert with_motion.cleaned_emg.shape == no_motion.cleaned_emg.shape
+    assert with_motion.diagnostics["motion"].get("used") is not False  # ran -> per_channel
+    assert "per_channel" in with_motion.diagnostics["motion"]
+    assert with_motion.cleaned_emg_motiononly is not None
+    # At least one channel had an ACC predictor and was touched.
+    assert not np.allclose(with_motion.cleaned_emg, no_motion.cleaned_emg)
+
+
+def test_session_without_ecg_stage_has_no_ica(fixtures_dir, tmp_path):
+    """With the ECG stage off, ``from_log`` fits no ICA and ``recompute`` still
+    produces a result (preprocess + optional motion)."""
+    lf = _load(fixtures_dir, "discover170.csv", tmp_path)
+    cfg = CleaningConfig(use_ecg_stage=False)
+    session = CleaningSession.from_log(lf, config=cfg)
+
+    assert session.ica is None
+    assert session.n_components == 0
+    assert session.auto_components() == []
+
+    result = session.recompute([], motion="auto")
+    assert result.ica is None
+    assert result.diagnostics["ecg"] == {"used": False}
+    assert result.cleaned_emg.shape[1] == lf.emg().shape[1]

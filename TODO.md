@@ -69,8 +69,8 @@ To regenerate this snapshot::
   `lf.annotate_noise()` opens a delsys subclass of datanavigator's `SignalBrowser`
   (with a new signal dropdown) to mark noise per signal and drive interactive
   cleaning; windows persist to a per-log `<stem>.delsys-noise` sidecar keyed by
-  `"<sensor>.<modality>[.<coord>] | <label>"`; the per-folder
-  `delsys_cleaning.json` `noise_event_ref` points at it. Phased: (A) dnav sidebar
+  `"<sensor>.<modality>[.<coord>] | <label>"`; the per-log
+  `<stem>.delsys-artifact` decision's `noise_event_ref` points at it. Phased: (A) dnav sidebar
   dropdown, (B) delsys sidecar data layer, (C) the subclass + `annotate_noise`.
 - **Batch cleaning (`delsys.clean`) follow-ups** (the batch/manifest/docs layer
   shipped in `_clean.py` + `_noise.py` — see CHANGELOG `[Unreleased]`):
@@ -92,6 +92,23 @@ To regenerate this snapshot::
     `target_sr` (default `TARGET_SR`) and `clock_mul=1`; per-trial alignment
     (from the trial-DB row) is a downstream concern today. Revisit once the
     datanest integration pulls `clock_mul`/`t0` per trial.
+- **Unsaved-changes warning on window close** (annotator + `Log.clean()`).
+  Deferred deliberately: the right home is a *generic* capability in datanavigator
+  (a browser registers `is_dirty` + `save` callbacks; datanavigator installs a Qt
+  `closeEvent` that pops Save/Discard/Cancel, no-op off-Qt) so both dustrack (which
+  has a bespoke version today — `_prompt_save_on_close` / `_scan_unsaved_layers`)
+  and delsys consume it. That cross-repo refactor isn't trivial, so it waits;
+  datanavigator already exposes the `find_qt_window` primitive it would build on.
+- **Faithful noise in the `Log.clean()` preview.** `CleaningSession.from_log` fits
+  the ICA on the *raw* (un-noise-masked) EMG; `delsys.clean()` applies the
+  `.delsys-noise` sidecar before cleaning. So the live preview can differ slightly
+  from the final output on trials with aggressive noise windows. Fix: apply the
+  sibling sidecar in `from_log` before the fit (pairs naturally with auto-noise
+  detection, which writes the same sidecar).
+- **Further `Log.clean()` latency** if real-trial clicks are still slow: cache the
+  per-channel motion lagged-design + normal-equation factorization per pairing (so
+  a component toggle's motion stage is a solve, not a rebuild), and skip the main
+  motion pass entirely when the previewed splice is `ekgonly`.
 - **Plotting helpers for the cleaner.** Port
   `plot_ica_components` / `plot_signals_before_after` from
   `pn-projects/projects/emg_ica_cleaning.py` if a downstream caller

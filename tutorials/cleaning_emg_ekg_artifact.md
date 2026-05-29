@@ -95,65 +95,62 @@ for you by default — `generate_report=False` opts out.
 result = lf.clean_emg_ekg_artifact()
 ```
 
-## 5. Interactive review
+## 5. Interactive cleaning — `lf.clean()`
 
-`result.review()` opens a 3-panel matplotlib window — raw vs ekg-only,
-raw vs motion-only, raw vs combined-cleaned — and cycles through every
-EMG channel in ranked-by-attenuation order.
+For a single trial you usually want to *decide*, not just look: which
+ICA components to remove, whether the result looks clean, and which
+variant to keep. `lf.clean()` is one window for the whole decision (the
+single-log counterpart to the batch `delsys.clean()`). It fits the ICA
+once and recomputes cheaply as you toggle, so the preview re-cleans live.
+
+```python
+lf = delsys.Log("Trial_5.h5")   # a native checkpoint
+lf.clean()                      # opens the interactive cleaner
+```
+
+The window has two regions. **Top + left — the picker:** an all-components
+bar shows each IC's EKG correlation (which one is the heartbeat?), colored
+red where removed; **click a bar to toggle that IC's removal**, and the
+clicked IC's detail (time course + strongest input contributor) appears
+below. **Right — the reviewer:** the previewed EMG channel, raw vs the chosen
+cleaned variant, plus its PSD. A single **Motion** auto/off toggle and a
+**`splice`** selector (`combined` / `ekgonly` / `motiononly`) finish the
+decision.
 
 Key bindings:
 
-| key             | action                              |
-|-----------------|-------------------------------------|
-| `→` / `n`       | next channel (wrap)                 |
-| `←` / `p`       | previous channel (wrap)             |
-| `home` / `end`  | first / last channel                |
-| `e`             | toggle ekg-only overlay             |
-| `m`             | toggle motion-only overlay          |
-| `c`             | toggle combined-cleaned overlay     |
-| `o`             | toggle all overlays at once         |
-| `q`             | close                               |
+| key / action       | effect                                          |
+|--------------------|-------------------------------------------------|
+| **click a bar**    | inspect that IC (switch the detail panel)       |
+| `1`                | toggle the inspected IC's removal               |
+| `j` / `k`          | inspect previous / next IC (no toggle)          |
+| `→` / `←`          | preview next / previous EMG channel             |
+| `channel` dropdown | jump to an EMG channel                          |
+| `Motion` toggle    | auto (each sensor's own ACC) vs off             |
+| `splice` menu      | combined / ekgonly / motiononly variant         |
+| `Auto limits`      | off (default) keeps your time-axis zoom; on resets |
 
-Restrict to specific channels with `channels=[...]` (column indices
-into the EMG matrix):
+The three time-domain panels (inspected IC, its contributor, the channel
+preview) share one x-axis, and that zoom is preserved as you inspect different
+ICs, step channels, or switch splice — so you can compare at a fixed window. Each
+panel's y-axis rescales to the data inside the visible x-window (so a zoomed-in
+view isn't dwarfed by a spike elsewhere).
 
-```python
-# Inspect just the top 5 most-attenuated channels.
-ranked = sorted(
-    range(result.cleaned_emg.shape[1]),
-    key=lambda i: result.cleaned_emg[:, i].var() / result.stages["raw"][:, i].var(),
-)
-result.review(channels=ranked[:5])
-```
+**Save decision** writes the explicit decision — the removal set, the
+splice, and the motion choice — to the sibling `<stem>.delsys-artifact`, and
+clears any stale `*_cleaned.h5`. So the loop is: review → Save → re-run the
+batch `delsys.clean()` (see `tutorials/workflow.md`), which reproduces exactly
+what you previewed (and re-consumes a sibling `.delsys-noise` sidecar). The
+reviewer needs an EKG reference and the ECG stage on — it raises if there are
+no components to pick.
 
-## 5b. Reviewing ICA components
+> Need per-sensor ACC re-pairing (rare)? It's not in the GUI — pass a
+> `motion={emg_sensor: target}` dict to `CleaningSession.recompute` / record it
+> in the `.delsys-artifact` sidecar's `motion` field.
 
-`result.review_components()` opens a 4-panel viewer showing one
-component at a time — the IC time course on top, then the three input
-signals it most contributes to (ranked by `|A[i, c]|`, the absolute
-mixing-matrix coefficient). Use this when the auto-detected component
-looks wrong: cycle through every IC, decide which to keep / drop, then
-re-run with a manual override via
-`CleaningConfig.ecg_components_to_remove`.
-
-Key bindings:
-
-| key             | action                              |
-|-----------------|-------------------------------------|
-| `→` / `n`       | next component (wrap)               |
-| `←` / `p`       | previous component (wrap)           |
-| `home` / `end`  | first / last component              |
-| `q`             | close                               |
-
-```python
-result.review_components()              # cycle through every IC
-result.review_components(components=[0, 4, 7])  # restrict to a subset
-```
-
-The viewer needs `result.ica` to be populated, which only happens when
-the ECG stage ran. `result.ica_input_feature_names` lists the EMG
-channel names with `"EKG"` appended — those are the labels rendered on
-the contributor panels.
+The headless core is `delsys.CleaningSession` (`CleaningSession.from_log(lf)`
+then `.recompute(components_to_remove, motion=...)`), if you want to drive
+the same fit-once recompute from a script.
 
 ## 6. Mutating in place
 

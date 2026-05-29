@@ -1,9 +1,10 @@
-"""Batch ``delsys.clean()`` + the decisions manifest + noise-event consumption.
+"""Batch ``delsys.clean()`` + the per-log decision sidecar + noise-event consumption.
 
 The headline property is the reproducibility contract
-``cleaned.h5 = f(raw.h5, manifest)``: a first pass freezes the auto-chosen
-decision into ``delsys_cleaning.json`` and a replay reproduces the cleaned
-checkpoint bit-for-bit. ``discover170.csv`` is the one fixture used end-to-end
+``cleaned.h5 = f(raw.h5, <stem>.delsys-artifact)``: a first pass freezes the
+auto-chosen decision into a per-log ``Trial_*.delsys-artifact`` sidecar and a
+replay reproduces the cleaned checkpoint bit-for-bit. ``discover170.csv`` is the
+one fixture used end-to-end
 (it carries both EMG and EKG, so the ECG stage actually runs); the cleaning
 algorithm itself is covered in ``test_cleaning.py``.
 """
@@ -22,8 +23,18 @@ import pytest  # noqa: E402
 import delsys  # noqa: E402
 import delsys.log  # noqa: E402
 from delsys import CleaningConfig  # noqa: E402
-from delsys._clean import _config_body, read_manifest  # noqa: E402
-from delsys._noise import apply_noise_mask, read_noise_intervals  # noqa: E402
+from delsys._clean import (  # noqa: E402
+    _config_body,
+    read_decision,
+    upsert_decision,
+    write_decision,
+)
+from delsys._noise import (  # noqa: E402
+    apply_noise_mask,
+    read_noise_intervals,
+    sidecar_path_for,
+    write_noise_sidecar,
+)
 
 FIXTURE = "discover170.csv"  # 18 sensors, EMG + EKG present
 
@@ -57,7 +68,7 @@ def test_clean_builds_artifacts_and_is_idempotent(raw_checkpoint):
     cleaned = folder / "Trial_5_cleaned.h5"
     assert cleaned.exists()
     assert (folder / "Trial_5_cleaning_report.pdf").exists()
-    assert (folder / "delsys_cleaning.json").exists()
+    assert (folder / "Trial_5.delsys-artifact").exists()
     assert (folder / "delsys_cleaning_report.txt").exists()
     # The cleaned checkpoint reloads as a normal Log.
     assert delsys.Log(str(cleaned)).emg is not None
@@ -118,18 +129,17 @@ def test_clean_progress_summary_and_silence(raw_checkpoint, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Manifest + reproducibility contract
+# Per-log decision sidecar + reproducibility contract
 # ---------------------------------------------------------------------------
 
 
-def test_manifest_captures_auto_decision(raw_checkpoint):
+def test_decision_sidecar_captures_auto_decision(raw_checkpoint):
     raw, folder = raw_checkpoint
     delsys.clean(str(folder), progress=False)
 
-    manifest = read_manifest(folder)
-    assert manifest["schema"] == 1
-    entry = manifest["trials"]["Trial_5"]
-    # The four top-level decision fields plus the config body.
+    # The decision lives in a per-log sibling, not a per-folder manifest.
+    assert (folder / "Trial_5.delsys-artifact").exists()
+    entry = read_decision(raw)
     assert isinstance(entry["ecg_components_to_remove"], list)
     assert entry["splice_source"] == "combined"
     assert entry["motion"] == "auto"
@@ -141,8 +151,8 @@ def test_manifest_captures_auto_decision(raw_checkpoint):
     assert "ecg_auto_remove_components" not in entry["config"]
 
 
-def test_replay_from_manifest_is_byte_identical(raw_checkpoint):
-    """First pass (auto) then a forced replay (manifest) produce identical output."""
+def test_replay_from_sidecar_is_byte_identical(raw_checkpoint):
+    """First pass (auto) then a forced replay (sidecar) produce identical output."""
     raw, folder = raw_checkpoint
     delsys.clean(str(folder), progress=False)
     sig1 = _signature(folder / "Trial_5_cleaned.h5")
@@ -153,31 +163,28 @@ def test_replay_from_manifest_is_byte_identical(raw_checkpoint):
     assert np.array_equal(sig1, sig2)
 
 
-def test_manifest_drives_output(raw_checkpoint):
-    """``cleaned.h5 = f(raw.h5, manifest)``: a hand-authored manifest reproduces
-    a direct ``clean_emg_ekg_artifact`` run with the same explicit decision."""
+def test_sidecar_drives_output(raw_checkpoint):
+    """``cleaned.h5 = f(raw.h5, .delsys-artifact)``: a hand-authored decision
+    reproduces a direct ``clean_emg_ekg_artifact`` run with the same explicit set."""
     raw, folder = raw_checkpoint
 
-    # Author a manifest that pins ECG component [0] (not what auto would pick).
-    manifest = {
-        "schema": 1,
-        "trials": {
-            "Trial_5": {
-                "ecg_components_to_remove": [0],
-                "splice_source": "combined",
-                "motion": "auto",
-                "noise_event_ref": None,
-                "config": _config_body(CleaningConfig()),
-            }
+    # Author a decision that pins ECG component [0] (not what auto would pick).
+    write_decision(
+        raw,
+        {
+            "ecg_components_to_remove": [0],
+            "splice_source": "combined",
+            "motion": "auto",
+            "noise_event_ref": None,
+            "config": _config_body(CleaningConfig()),
         },
-    }
-    (folder / "delsys_cleaning.json").write_text(json.dumps(manifest, indent=2))
+    )
 
     delsys.clean(str(folder), progress=False)
     via_clean = _signature(folder / "Trial_5_cleaned.h5")
 
-    # The manifest must be preserved verbatim (existing entry, not re-frozen).
-    assert read_manifest(folder)["trials"]["Trial_5"]["ecg_components_to_remove"] == [0]
+    # The decision must be preserved verbatim (existing sidecar, not re-frozen).
+    assert read_decision(raw)["ecg_components_to_remove"] == [0]
 
     # Independent reference: the same explicit decision applied directly.
     ref = delsys.Log(str(raw))
@@ -192,17 +199,17 @@ def test_manifest_drives_output(raw_checkpoint):
     assert np.array_equal(via_clean, via_direct)
 
 
-def test_editing_manifest_changes_output(raw_checkpoint):
+def test_editing_sidecar_changes_output(raw_checkpoint):
     """Editing the frozen decision changes the cleaned checkpoint on re-run."""
     raw, folder = raw_checkpoint
     delsys.clean(str(folder), progress=False)
     auto_sig = _signature(folder / "Trial_5_cleaned.h5")
 
-    manifest = read_manifest(folder)
-    auto_components = manifest["trials"]["Trial_5"]["ecg_components_to_remove"]
+    entry = read_decision(raw)
+    auto_components = entry["ecg_components_to_remove"]
     # Force a different decision: remove no ECG components at all.
-    manifest["trials"]["Trial_5"]["ecg_components_to_remove"] = []
-    (folder / "delsys_cleaning.json").write_text(json.dumps(manifest, indent=2))
+    entry["ecg_components_to_remove"] = []
+    write_decision(raw, entry)
 
     delsys.clean(str(folder), overwrite=True, progress=False)
     edited_sig = _signature(folder / "Trial_5_cleaned.h5")
@@ -218,20 +225,20 @@ def test_clean_accept_false_blocks_regeneration(raw_checkpoint):
     raw, folder = raw_checkpoint
     delsys.clean(str(folder), progress=False)
 
-    manifest = read_manifest(folder)
-    manifest["trials"]["Trial_5"]["accept"] = False
-    (folder / "delsys_cleaning.json").write_text(json.dumps(manifest, indent=2))
+    entry = read_decision(raw)
+    entry["accept"] = False
+    write_decision(raw, entry)
 
     res = delsys.clean(str(folder), overwrite=True, progress=False)
     assert res[str(raw)].startswith("skipped: rejected")
 
 
-def test_manifest_false_writes_no_manifest(raw_checkpoint):
+def test_record_decisions_false_writes_no_sidecar(raw_checkpoint):
     raw, folder = raw_checkpoint
-    res = delsys.clean(str(folder), manifest=False, progress=False)
+    res = delsys.clean(str(folder), record_decisions=False, progress=False)
     assert res[str(raw)] == "cleaned"
     assert (folder / "Trial_5_cleaned.h5").exists()
-    assert not (folder / "delsys_cleaning.json").exists()
+    assert not (folder / "Trial_5.delsys-artifact").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -312,11 +319,11 @@ def test_clean_consumes_noise_event(raw_checkpoint):
     raw, folder = raw_checkpoint
     _write_noise_event(folder / "noise.json", {"Trial_5": ([[0.02, 0.05]], [])})
 
-    # First pass freezes the manifest; then point the trial at the noise event.
+    # First pass freezes the decision; then point the trial at the noise event.
     delsys.clean(str(folder), progress=False)
-    manifest = read_manifest(folder)
-    manifest["trials"]["Trial_5"]["noise_event_ref"] = {"path": "noise.json", "key": "Trial_5"}
-    (folder / "delsys_cleaning.json").write_text(json.dumps(manifest, indent=2))
+    entry = read_decision(raw)
+    entry["noise_event_ref"] = {"path": "noise.json", "key": "Trial_5"}
+    write_decision(raw, entry)
 
     delsys.clean(str(folder), overwrite=True, progress=False)
     report = (folder / "delsys_cleaning_report.txt").read_text()
@@ -325,7 +332,7 @@ def test_clean_consumes_noise_event(raw_checkpoint):
 
 def test_clean_auto_consumes_sibling_delsys_noise(raw_checkpoint):
     """A sibling ``<stem>.delsys-noise`` is consumed by default and recorded as
-    provenance in the manifest's ``noise_event_ref``."""
+    provenance in the decision's ``noise_event_ref``."""
     from delsys._noise import format_signal_key, sidecar_path_for, write_noise_sidecar
 
     raw, folder = raw_checkpoint
@@ -338,6 +345,83 @@ def test_clean_auto_consumes_sibling_delsys_noise(raw_checkpoint):
     assert res[str(raw)] == "cleaned"
 
     # Defaulted ref points at the sibling sidecar (provenance, not the windows).
-    entry = read_manifest(folder)["trials"]["Trial_5"]
+    entry = read_decision(raw)
     assert entry["noise_event_ref"] == "Trial_5" + ".delsys-noise"
     assert "noise_masked=" in (folder / "delsys_cleaning_report.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 — upsert_decision (interactive review-cleaning write-back)
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_decision_writes_explicit_entry(raw_checkpoint):
+    raw, folder = raw_checkpoint
+    cfg = CleaningConfig()
+    path = upsert_decision(
+        str(raw),
+        components=[2, 0, 2],  # de-duplicated + sorted on write
+        config=cfg,
+        splice_source="ekgonly",
+        motion=None,
+    )
+    assert path == str(folder / "Trial_5.delsys-artifact")
+
+    entry = read_decision(raw)
+    assert entry["ecg_components_to_remove"] == [0, 2]
+    assert entry["splice_source"] == "ekgonly"
+    assert entry["motion"] is None
+    assert entry["accept"] is True
+    assert entry["noise_event_ref"] is None  # no sibling sidecar present
+    # Stored config body matches and omits the top-level selection fields.
+    assert entry["config"] == _config_body(cfg)
+    assert "ecg_components_to_remove" not in entry["config"]
+
+
+def test_upsert_decision_defaults_noise_ref_to_sibling_sidecar(raw_checkpoint):
+    raw, folder = raw_checkpoint
+    write_noise_sidecar(sidecar_path_for(str(raw)), {"3.EMGS": [[0.1, 0.2]]})
+
+    upsert_decision(str(raw), components=[1], config=CleaningConfig())
+    entry = read_decision(raw)
+    assert entry["noise_event_ref"] == "Trial_5.delsys-noise"
+
+
+def test_upsert_decision_marks_cleaned_snapshot_stale(raw_checkpoint):
+    raw, folder = raw_checkpoint
+    delsys.clean(str(folder), progress=False)
+    cleaned = folder / "Trial_5_cleaned.h5"
+    assert cleaned.exists()
+
+    upsert_decision(str(raw), components=[1], config=CleaningConfig())
+    assert not cleaned.exists()  # stale snapshot cleared
+
+
+def test_upsert_decision_mark_stale_false_keeps_snapshot(raw_checkpoint):
+    raw, folder = raw_checkpoint
+    delsys.clean(str(folder), progress=False)
+    cleaned = folder / "Trial_5_cleaned.h5"
+
+    upsert_decision(str(raw), components=[1], config=CleaningConfig(), mark_stale=False)
+    assert cleaned.exists()
+
+
+def test_upsert_decision_is_replayed_by_clean(raw_checkpoint):
+    """A hand-written decision is honored verbatim on the next clean: the entry
+    is replayed (not re-frozen) and the cleaned snapshot regenerates."""
+    raw, folder = raw_checkpoint
+    upsert_decision(str(raw), components=[0], config=CleaningConfig(), motion=None)
+
+    res = delsys.clean(str(folder), progress=False)
+    assert res[str(raw)] == "cleaned"
+    assert (folder / "Trial_5_cleaned.h5").exists()
+    # clean replayed our explicit decision rather than overwriting it.
+    entry = read_decision(raw)
+    assert entry["ecg_components_to_remove"] == [0]
+    assert entry["motion"] is None
+
+
+def test_upsert_decision_rejects_bad_splice(raw_checkpoint):
+    raw, _ = raw_checkpoint
+    with pytest.raises(ValueError):
+        upsert_decision(str(raw), components=[], config=CleaningConfig(), splice_source="bogus")

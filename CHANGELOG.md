@@ -68,23 +68,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is immutable; its own `*_cleaned.h5` outputs are skipped on re-walk. A fresh
   `Log` is loaded per trial, so the in-place cleaning never touches a Log a caller
   holds.
-  - **Decisions manifest** (`delsys_cleaning.json`, per-folder, keyed by
-    checkpoint stem) makes the cleaning reproducible: `cleaned.h5 = f(raw.h5,
-    manifest)`. Each entry records the ICA components removed, the spliced variant
+  - **Per-log decision sidecar** (`<stem>.delsys-artifact`, sibling to the
+    checkpoint — the same per-log, file-centric model as `<stem>.delsys-noise`)
+    makes the cleaning reproducible: `cleaned.h5 = f(raw.h5, <stem>.delsys-artifact)`.
+    Each sidecar records the ICA components removed, the spliced variant
     (`splice_source`), the motion pairing, an optional `noise_event_ref`, an
     `accept` review flag, and the rest of the `CleaningConfig` knobs. Marking a
     trial's `accept` `false` (after eyeballing its PDF) blocks regeneration even
     under `overwrite=True` until the decision is fixed and the flag flipped back.
-    A trial with no entry is cleaned with
-    auto-detection and its resolved decision is *frozen* into the manifest; a
-    later pass replays the frozen decision (auto-detection off, recorded
-    components applied verbatim). Because the FastICA fit is seeded, a re-run
-    reproduces the cleaned checkpoint bit-for-bit — verified on the pia02 sandbox
-    (a forced replay of a ~5.9M-sample cleaned trial is byte-identical). The
-    `config` argument is only the base for trials *without* an entry; it never
-    overrides an existing decision. Edit the manifest (swap the auto-chosen IC,
-    change `splice_source`, attach a noise event) and re-run with `overwrite=True`
-    to regenerate just the touched trials.
+    A trial with no sidecar is cleaned with auto-detection and its resolved
+    decision is *frozen* into a fresh sidecar; a later pass replays it
+    (auto-detection off, recorded components applied verbatim). Because the FastICA
+    fit is seeded, a re-run reproduces the cleaned checkpoint bit-for-bit — verified
+    on the pia02 sandbox (a forced replay of a ~5.9M-sample cleaned trial is
+    byte-identical). The `config` argument is only the base for trials *without* a
+    sidecar; it never overrides an existing decision. Edit the sidecar (swap the
+    auto-chosen IC, change `splice_source`, attach a noise event), or use the
+    interactive `Log.clean()`, and re-run with `overwrite=True` to
+    regenerate just the touched trials. `delsys.clean(..., record_decisions=False)`
+    cleans with the call's defaults and reads/writes no sidecars; a per-folder
+    `delsys_cleaning_report.txt` summarizes each run (an overview, not the source
+    of truth).
 - **Noise-window consumption** (`delsys._noise`) — reads human-authored noise
   Events (marked in `datanavigator`'s `SignalBrowser`) as **plain JSON**, with no
   `datanavigator` dependency. `read_noise_intervals(path, trial_id)` parses the
@@ -123,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     shorthand).
   - `delsys.clean` defaults a trial's `noise_event_ref` to a sibling
     `<stem>.delsys-noise` when present (consumed before the cleaner; the resolved
-    basename is frozen into the manifest as provenance). Consumption dispatches by
+    basename is frozen into the decision sidecar as provenance). Consumption dispatches by
     suffix, so existing datanavigator-Event refs still work.
 - **`Log.annotate_noise(view=...)`** — interactive noise annotator
   (`delsys.annotate`; `datanavigator` imported lazily so the delsys core stays
@@ -140,14 +144,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     channel via the dropdown; a **Mod scope** toggle records against the channel
     (coord-ful) or whole sensor+modality (coord-less); **Toggle dead** / **Undo
     window** buttons.
-  - **`view="sensor"`** — `PlotBrowser` subclass: one sensor's modalities
-    (EMG/ACC/GYRO/…) as stacked, time-aligned subplots, picked via the dropdown.
-    Marking targets the hovered subplot's whole sensor+modality; **`d`** toggles
-    that modality dead. Built for blips shared across a sensor's channels.
-  (Interactive ICA cleaning from the same browser is a follow-up.)
+  - **`view="sensor"`** — `PlotBrowser` subclass: one sensor's modalities as
+    stacked, time-aligned subplots, picked via the dropdown. **EMGQ / FSR / Analog
+    get one subplot per sub-channel** (so each Quattro channel, FSR pad, or Sync
+    line is individually markable — and a Sync carrying a single line shows one
+    panel), while EMGS/EKG (single trace) and ACC/GYRO (X/Y/Z overlaid) stay as one
+    whole-modality subplot; a sensor mixing EMGQ with ACC/GYRO shows them all.
+    Marking targets the hovered subplot's address; a **Sensor scope** toggle instead
+    fans the mark across every modality of the sensor (a wall-clock burst hits them
+    all). **`d`** toggles dead. Built for blips shared across a sensor's channels.
+- **`Log.clean()`** — interactive ECG/ICA cleaning tool (`delsys.clean_review`;
+  `datanavigator` imported lazily). The single-log interactive counterpart to the
+  batch `delsys.clean()`, and the unified successor to the old read-only
+  `CleaningResult.review` / `review_components` viewers. One window, two regions: an
+  **all-components bar** of each IC's EKG correlation (**click a bar — or `j`/`k` —
+  to inspect that IC**; `1` / the button toggles its removal, red = removed) with the
+  inspected IC's detail below it, and a **channel reviewer** (raw vs the chosen
+  cleaned variant + PSD; step channels with the arrow keys / `channel` dropdown). The
+  three time-domain panels share one x-axis whose zoom persists across redraws
+  (compare ICs/channels at a fixed window; **Auto limits** resets), and each panel's
+  y rescales to the data in the visible x-window. A single
+  **Motion** auto/off toggle and a **splice** selector drive the rest. **Save
+  decision** writes
+  the explicit decision (removal set + splice + motion) to the sibling
+  `<stem>.delsys-artifact` and clears the stale `*_cleaned.h5`, so the next
+  `delsys.clean()` reproduces exactly what was previewed. (For headless/programmatic
+  single-log cleaning use `clean_emg_ekg_artifact`.)
+- **`delsys.CleaningSession`** — the headless fit-once core behind `Log.clean()`
+  (`CleaningSession.from_log(lf, config=...)`). Fits FastICA once, then
+  `.recompute(components_to_remove, motion=..., motiononly=...)` re-derives a full
+  `CleaningResult` for any removal set / motion pairing *without refitting*
+  (component removal is a reconstruction; the EKG + ACC regressions are cheap linear
+  solves) — cheap enough to drive the live picker. The resampled ACC predictors are
+  cached per pairing (a component toggle never re-resamples), and `motiononly=False`
+  skips the second motion pass when the preview isn't showing that variant.
+  `.auto_components()` gives the auto-detected default set.
+- **`delsys._clean.upsert_decision(checkpoint, …)`** — write/replace a checkpoint's
+  `<stem>.delsys-artifact` decision sidecar (the reviewer's Save); optionally clears
+  the stale `*_cleaned.h5`. Read/write the sidecar directly via
+  `delsys._clean.read_decision` / `write_decision`.
 - `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
-  `clean` → `*_cleaned.h5` → analysis), covering the manifest edit/re-run loop;
-  section 4 now leads with `lf.annotate_noise()` + the `.delsys-noise` sidecar
+  `clean` → `*_cleaned.h5` → analysis), covering the decision-sidecar edit/re-run
+  loop; section 4 now leads with `lf.annotate_noise()` + the `.delsys-noise` sidecar
   (the datanavigator-Event path kept as legacy).
 
 ### Changed
@@ -167,6 +205,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel-grid window still snaps to the coarsest *requested* rate exactly as
   before (existing `Log(csv, target_sr)` output is unchanged, verified bitwise);
   `None` entries are simply excluded from that snap instead of crashing it.
+
+### Removed
+
+- **`CleaningResult.review()` and `CleaningResult.review_components()`** (and their
+  internal viewers). The two read-only matplotlib viewers are replaced by the single
+  interactive `Log.clean()` window above, which folds in their per-channel
+  raw-vs-cleaned and per-IC inspection panels and adds the act-on-it loop (toggle →
+  re-clean → save). The batch `CleaningResult.generate_report()` PDF is unchanged.
 
 ## [0.4.1] - 2026-05-10
 

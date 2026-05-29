@@ -81,12 +81,26 @@ result = lf.clean_emg_ekg_artifact(in_place=False, generate_report=False)
 lf.clean_emg_ekg_artifact(splice_source="ekgonly")
 ```
 
-Interactive helpers:
+Interactive cleaning — `lf.clean()`:
 
-- `result.review()` — cycle through every EMG channel, raw vs each
-  cleaning variant, with arrow-key navigation.
-- `result.review_components()` — cycle through the ICA components plus
-  their top three input contributors.
+One window to pick the ECG/ICA cleaning decision (the single-log counterpart to
+the batch `delsys.clean()`). An all-components bar shows each IC's EKG
+correlation — **click a bar (or `j`/`k`) to inspect that IC**, **`1`** toggles
+its removal (red = removed) — with the inspected IC's detail beside it; a channel
+reviewer shows raw vs cleaned (arrow keys / the `channel` dropdown step
+channels), and a **Motion** auto/off toggle + **splice** selector finish the
+decision. The three time-domain panels share an x-axis whose zoom persists across
+redraws (so you can compare ICs/channels at the same window; **Auto limits**
+resets), and each panel's y rescales to the data in the visible x-window. **Save** writes the decision to the sibling `<stem>.delsys-artifact` that
+`delsys.clean()` replays (and clears the stale `*_cleaned.h5`). The ICA is fit
+once on open and toggles recompute cheaply. Mark noise first with
+`lf.annotate_noise()`; `clean()` consumes the sibling `.delsys-noise` sidecar
+automatically.
+
+```python
+lf = delsys.Log("Trial_5.h5")   # a native checkpoint
+lf.clean()                      # click ICs, preview, Save -> .delsys-artifact
+```
 
 See [`tutorials/cleaning_emg_ekg_artifact.md`](https://github.com/praneethnamburi/delsys/blob/main/tutorials/cleaning_emg_ekg_artifact.md)
 for the full walkthrough.

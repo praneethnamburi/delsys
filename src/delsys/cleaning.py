@@ -156,15 +156,16 @@ class CleaningResult:
             stage skipped (preprocess + motion). ``None`` when the
             motion stage didn't run.
         feature_names: Per-EMG-channel labels (length
-            ``n_emg_channels``). Used by :meth:`generate_report` and
-            :meth:`review` to title each channel.
+            ``n_emg_channels``). Used by :meth:`generate_report` and the
+            :mod:`delsys.clean_review` picker to title each channel.
         fname: Source CSV path. Stamped by
             :class:`Log.clean_emg_ekg_artifact` so that
             :meth:`generate_report` can default to a sibling of the
             input file.
         ica: Full :class:`ICAResult` from the ECG stage (model, sources,
             mixing matrix, feature names). ``None`` when the ECG stage
-            didn't run. Used by :meth:`review_components`.
+            didn't run. Surfaced by :class:`CleaningSession` for the
+            interactive component picker.
         ica_input_feature_names: Per-input-row labels for ``ica.mixing``
             — the EMG channel names with ``"EKG"`` appended as the last
             entry. ``None`` when the ECG stage didn't run. Distinct from
@@ -202,55 +203,6 @@ class CleaningResult:
             The :class:`pathlib.Path` of the file that was written.
         """
         return _write_report_pdf(self, path)
-
-    def review(self, *, channels: Optional[List[int]] = None) -> None:
-        """Open an interactive matplotlib viewer over the cleaned channels.
-
-        Three stacked time-domain panels per channel — raw vs
-        ekg-only, raw vs motion-only, raw vs combined-cleaned — with
-        arrow-key navigation and overlay toggles. See module docstring
-        / tutorial for the full key map.
-
-        Args:
-            channels: Optional list of EMG column indices to cycle
-                through. When ``None`` (default), every channel is
-                shown in ranked-by-attenuation order.
-        """
-        _open_review_window(self, channels=channels)
-
-    def review_components(self, *, components: Optional[List[int]] = None) -> None:
-        """Open an interactive viewer over the ICA components.
-
-        Four stacked panels per component — the IC time course on top
-        and the three input signals it most contributes to (ranked by
-        ``|A[i, c]|``, the absolute mixing-matrix coefficient). Use to
-        decide whether to manually add or drop a component from the
-        auto-detected set in
-        :attr:`CleaningConfig.ecg_components_to_remove`.
-
-        For unit-variance ICA sources the ranking by ``|A[i, c]|`` is
-        proportional to ``corr(sources[:, c], input[:, i]) * std(input[:, i])``,
-        so it matches "input signals this IC shows up in most" up to
-        per-input-variance scaling. Pure-correlation ranking (without
-        the std factor) needs to be computed by hand.
-
-        Key bindings:
-
-        * ``→`` / ``n`` — next component (wrap)
-        * ``←`` / ``p`` — previous component (wrap)
-        * ``home`` / ``end`` — first / last
-        * ``q`` — close
-
-        Args:
-            components: Optional list of IC indices to cycle through.
-                When ``None`` (default), every component is shown in
-                index order.
-
-        Raises:
-            ValueError: If the ECG stage did not run (no ICA result to
-                review).
-        """
-        _open_components_review_window(self, components=components)
 
 
 # ---------------------------------------------------------------------------
@@ -773,24 +725,24 @@ def _preprocess_emg_stage(
     return np.asarray(d())
 
 
-def _run_ecg_stage(
+def _fit_ecg_ica(
     pre_emg: np.ndarray,
     ekg_1d: np.ndarray,
     config: CleaningConfig,
     feature_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """ICA-based ECG suppression with optional residual regression.
+    """Fit FastICA on the EMG+EKG matrix and score each IC against the EKG.
 
-    Concatenates the EKG as the trailing column of the EMG matrix so
-    FastICA decomposes the joint structure. Components are zeroed by
-    manual override (when ``config.ecg_components_to_remove`` is set)
-    or auto-detection (lagged correlation against the EKG); the EKG
-    column is then dropped from the reconstructed output. When
-    ``ecg_use_regression=True``, a second pass ridge-regresses the
-    lagged EKG out of every cleaned channel.
+    The *expensive* half of the ECG stage. Concatenates the EKG as the trailing
+    column of the EMG matrix so FastICA decomposes the joint structure, then (when
+    ``ecg_auto_remove_components``) scores each IC by lagged correlation against
+    the EKG. Split out from :func:`_run_ecg_stage` so an interactive
+    :class:`CleaningSession` can fit once and re-zero components cheaply via
+    :func:`_apply_ecg_components`.
 
-    Returns a dict with ``cleaned_emg`` (n, n_emg_channels), the IC
-    bookkeeping, and the regression beta when run.
+    Returns a dict with ``ica_result``, the per-IC ``ic_corr_scores`` /
+    ``ic_best_lags`` (``None`` when auto-detection is off), and
+    ``ica_input_feature_names`` (the EMG names with ``"EKG"`` appended).
     """
     ecg_input = np.column_stack([pre_emg, np.asarray(ekg_1d).reshape(-1)])
     feat_with_ekg = (
@@ -805,11 +757,6 @@ def _run_ecg_stage(
         feature_names=feat_with_ekg,
     )
 
-    manual = _normalize_component_selection(
-        config.ecg_components_to_remove, ica_result.sources.shape[1]
-    )
-
-    auto_components: List[int] = []
     ic_corr_scores = None
     ic_best_lags = None
     if config.ecg_auto_remove_components:
@@ -818,39 +765,194 @@ def _run_ecg_stage(
             ekg_1d=ecg_input[:, -1],
             max_lag_samples=config.ecg_corr_max_lag_samples,
         )
-        auto_components = auto_select_ekg_components(
-            ic_corr_scores,
-            min_corr=config.ecg_corr_threshold,
-            keep_at_least_one_when_strong=True,
-            max_components=config.ecg_max_auto_components,
-        )
 
-    selected_all = sorted(set(manual + auto_components))
-    cleaned_full, _ = reconstruct_without_components(ica_result, selected_all)
+    return {
+        "ica_result": ica_result,
+        "ic_corr_scores": ic_corr_scores,
+        "ic_best_lags": ic_best_lags,
+        "ica_input_feature_names": feat_with_ekg,
+    }
 
-    # Drop the EKG column from the reconstructed output.
-    cleaned_emg = cleaned_full[:, :-1]
+
+def _apply_ecg_components(
+    ica_result: "ICAResult",
+    ekg_1d: np.ndarray,
+    components_to_remove: Optional[Union[str, List[int]]],
+    config: CleaningConfig,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """Reconstruct the EMG with ``components_to_remove`` zeroed — no refit.
+
+    The *cheap* half of the ECG stage: re-zero the chosen ICs on an
+    already-fitted :class:`ICAResult` (:func:`reconstruct_without_components`),
+    drop the trailing EKG column, then optionally ridge-regress the lagged EKG
+    out of every channel (``ecg_use_regression``). This is the primitive the
+    interactive component picker re-runs on every toggle.
+
+    Returns ``(cleaned_emg, regression_beta)`` — the latter ``None`` when the
+    regression pass is off.
+    """
+    cleaned_full, _ = reconstruct_without_components(ica_result, components_to_remove)
+    cleaned_emg = cleaned_full[:, :-1]  # drop the EKG column
 
     regression_beta = None
     if config.ecg_use_regression:
         cleaned_emg, regression_beta = regress_out_ekg_from_emg(
             cleaned_emg,
-            ekg_1d=ecg_input[:, -1],
+            ekg_1d=np.asarray(ekg_1d).reshape(-1),
             max_lag_samples=config.ecg_reg_max_lag_samples,
             ridge_alpha=config.ecg_reg_ridge_alpha,
         )
+    return cleaned_emg, regression_beta
+
+
+def _select_ecg_components(fit: Dict[str, Any], config: CleaningConfig) -> Dict[str, List[int]]:
+    """Resolve the IC set to remove from a :func:`_fit_ecg_ica` result.
+
+    Combines the manual override (``ecg_components_to_remove``) with the
+    auto-detected EKG-correlated ICs. Returns the ``manual`` / ``auto`` / merged
+    ``selected`` index lists.
+    """
+    n_components = fit["ica_result"].sources.shape[1]
+    manual = _normalize_component_selection(config.ecg_components_to_remove, n_components)
+    auto_components: List[int] = []
+    if config.ecg_auto_remove_components and fit["ic_corr_scores"] is not None:
+        auto_components = auto_select_ekg_components(
+            fit["ic_corr_scores"],
+            min_corr=config.ecg_corr_threshold,
+            keep_at_least_one_when_strong=True,
+            max_components=config.ecg_max_auto_components,
+        )
+    return {
+        "manual": manual,
+        "auto": auto_components,
+        "selected": sorted(set(manual + auto_components)),
+    }
+
+
+def _run_ecg_stage(
+    pre_emg: np.ndarray,
+    ekg_1d: np.ndarray,
+    config: CleaningConfig,
+    feature_names: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """ICA-based ECG suppression with optional residual regression.
+
+    Composes the fit (:func:`_fit_ecg_ica`), component selection
+    (:func:`_select_ecg_components`), and reconstruction
+    (:func:`_apply_ecg_components`). Returns a dict with ``cleaned_emg``
+    (n, n_emg_channels), the IC bookkeeping, and the regression beta when run.
+    """
+    fit = _fit_ecg_ica(pre_emg, ekg_1d, config, feature_names)
+    ica_result = fit["ica_result"]
+    sel = _select_ecg_components(fit, config)
+    cleaned_emg, regression_beta = _apply_ecg_components(
+        ica_result, ekg_1d, sel["selected"], config
+    )
 
     return {
         "cleaned_emg": cleaned_emg,
-        "components_removed": selected_all,
-        "manual_components_removed": manual,
-        "auto_ekg_components_removed": auto_components,
-        "ic_ekg_corr_scores": ic_corr_scores,
-        "ic_ekg_best_lags": ic_best_lags,
+        "components_removed": sel["selected"],
+        "manual_components_removed": sel["manual"],
+        "auto_ekg_components_removed": sel["auto"],
+        "ic_ekg_corr_scores": fit["ic_corr_scores"],
+        "ic_ekg_best_lags": fit["ic_best_lags"],
         "regression_beta": regression_beta,
         "ica_result": ica_result,
-        "ica_input_feature_names": feat_with_ekg,
+        "ica_input_feature_names": fit["ica_input_feature_names"],
     }
+
+
+def _assemble_result(
+    stages: Dict[str, np.ndarray],
+    diagnostics: Dict[str, Any],
+    coefficients: Dict[str, Any],
+    sr: float,
+    *,
+    acc_by_emg: Optional[Dict[int, np.ndarray]],
+    config: CleaningConfig,
+    feature_names: Optional[List[str]],
+    time: Optional[np.ndarray],
+    ica_result: Optional["ICAResult"],
+    ica_input_feature_names: Optional[List[str]],
+    compute_motiononly: bool = True,
+) -> CleaningResult:
+    """Run the motion stage and assemble the final :class:`CleaningResult`.
+
+    The shared tail of :func:`run_pipeline` and
+    :meth:`CleaningSession.recompute`. On entry ``stages`` must already hold
+    ``raw`` / ``preprocessed`` / ``post_ecg`` and ``diagnostics`` /
+    ``coefficients`` their ECG entries. This adds the motion stage (in place on
+    those dicts), computes the stage-isolated variants, fills ``stages["cleaned"]``,
+    and builds the result. ``ica_result is not None`` is the "ECG stage ran" flag.
+
+    ``compute_motiononly=False`` skips the second motion-regression pass that
+    produces ``cleaned_emg_motiononly`` — an interactive preview that isn't showing
+    the motion-only variant doesn't need it (the live picker passes this).
+    """
+    cfg = config
+    post_ecg = stages["post_ecg"]
+
+    post_motion = post_ecg
+    motion_ran = False
+    if cfg.use_motion_stage and acc_by_emg:
+        post_motion, motion_betas, motion_diag = regress_out_motion_from_emg(
+            post_ecg,
+            acc_by_emg=acc_by_emg,
+            max_lag_samples=cfg.motion_max_lag_samples,
+            ridge_alpha=cfg.motion_ridge_alpha,
+            include_magnitude=cfg.motion_include_magnitude,
+            include_derivative=cfg.motion_include_derivative,
+            min_variance_ratio=cfg.min_variance_ratio,
+            min_power_ratio=cfg.min_power_ratio,
+        )
+        coefficients["motion_betas"] = motion_betas
+        diagnostics["motion"] = motion_diag
+        motion_ran = True
+    else:
+        diagnostics["motion"] = {"used": False}
+    stages["cleaned"] = post_motion
+
+    # Stage-isolated variants. ekg-only is a free read; motion-only
+    # requires a second motion-regression pass on the preprocessed
+    # signal (skips the ECG step) — cheap compared to ICA.
+    cleaned_emg_ekgonly = stages["post_ecg"] if ica_result is not None else None
+    cleaned_emg_motiononly: Optional[np.ndarray] = None
+    if motion_ran and compute_motiononly:
+        motiononly, _, _ = regress_out_motion_from_emg(
+            stages["preprocessed"],
+            acc_by_emg=acc_by_emg,
+            max_lag_samples=cfg.motion_max_lag_samples,
+            ridge_alpha=cfg.motion_ridge_alpha,
+            include_magnitude=cfg.motion_include_magnitude,
+            include_derivative=cfg.motion_include_derivative,
+            min_variance_ratio=cfg.min_variance_ratio,
+            min_power_ratio=cfg.min_power_ratio,
+        )
+        cleaned_emg_motiononly = motiononly
+
+    if time is None:
+        out_time = np.arange(stages["cleaned"].shape[0]) / float(sr)
+    else:
+        t_arr = np.asarray(time)
+        out_time = (
+            t_arr[: stages["cleaned"].shape[0]]
+            if t_arr.shape[0] >= stages["cleaned"].shape[0]
+            else np.arange(stages["cleaned"].shape[0]) / float(sr)
+        )
+
+    return CleaningResult(
+        cleaned_emg=stages["cleaned"],
+        sr=float(sr),
+        time=out_time,
+        stages=stages,
+        diagnostics=diagnostics,
+        coefficients=coefficients,
+        cleaned_emg_ekgonly=cleaned_emg_ekgonly,
+        cleaned_emg_motiononly=cleaned_emg_motiononly,
+        feature_names=list(feature_names) if feature_names is not None else None,
+        ica=ica_result,
+        ica_input_feature_names=ica_input_feature_names,
+    )
 
 
 def run_pipeline(
@@ -908,7 +1010,6 @@ def run_pipeline(
     stages["preprocessed"] = pre
 
     post_ecg = pre
-    ecg_ran = False
     ica_result: Optional[ICAResult] = None
     ica_input_feature_names: Optional[List[str]] = None
     if cfg.use_ecg_stage and ekg_1d is not None:
@@ -925,72 +1026,248 @@ def run_pipeline(
         }
         ica_result = ecg_stage["ica_result"]
         ica_input_feature_names = ecg_stage["ica_input_feature_names"]
-        ecg_ran = True
     else:
         diagnostics["ecg"] = {"used": False}
     stages["post_ecg"] = post_ecg
 
-    post_motion = post_ecg
-    motion_ran = False
-    if cfg.use_motion_stage and acc_by_emg:
-        post_motion, motion_betas, motion_diag = regress_out_motion_from_emg(
-            post_ecg,
-            acc_by_emg=acc_by_emg,
-            max_lag_samples=cfg.motion_max_lag_samples,
-            ridge_alpha=cfg.motion_ridge_alpha,
-            include_magnitude=cfg.motion_include_magnitude,
-            include_derivative=cfg.motion_include_derivative,
-            min_variance_ratio=cfg.min_variance_ratio,
-            min_power_ratio=cfg.min_power_ratio,
-        )
-        coefficients["motion_betas"] = motion_betas
-        diagnostics["motion"] = motion_diag
-        motion_ran = True
-    else:
-        diagnostics["motion"] = {"used": False}
-    stages["cleaned"] = post_motion
-
-    # Stage-isolated variants. ekg-only is a free read; motion-only
-    # requires a second motion-regression pass on the preprocessed
-    # signal (skips the ECG step) — cheap compared to ICA.
-    cleaned_emg_ekgonly = stages["post_ecg"] if ecg_ran else None
-    cleaned_emg_motiononly: Optional[np.ndarray] = None
-    if motion_ran:
-        motiononly, _, _ = regress_out_motion_from_emg(
-            stages["preprocessed"],
-            acc_by_emg=acc_by_emg,
-            max_lag_samples=cfg.motion_max_lag_samples,
-            ridge_alpha=cfg.motion_ridge_alpha,
-            include_magnitude=cfg.motion_include_magnitude,
-            include_derivative=cfg.motion_include_derivative,
-            min_variance_ratio=cfg.min_variance_ratio,
-            min_power_ratio=cfg.min_power_ratio,
-        )
-        cleaned_emg_motiononly = motiononly
-
-    if time is None:
-        out_time = np.arange(stages["cleaned"].shape[0]) / float(sr)
-    else:
-        t_arr = np.asarray(time)
-        out_time = (
-            t_arr[: stages["cleaned"].shape[0]]
-            if t_arr.shape[0] >= stages["cleaned"].shape[0]
-            else np.arange(stages["cleaned"].shape[0]) / float(sr)
-        )
-
-    return CleaningResult(
-        cleaned_emg=stages["cleaned"],
-        sr=float(sr),
-        time=out_time,
-        stages=stages,
-        diagnostics=diagnostics,
-        coefficients=coefficients,
-        cleaned_emg_ekgonly=cleaned_emg_ekgonly,
-        cleaned_emg_motiononly=cleaned_emg_motiononly,
-        feature_names=list(feature_names) if feature_names is not None else None,
-        ica=ica_result,
+    return _assemble_result(
+        stages,
+        diagnostics,
+        coefficients,
+        sr,
+        acc_by_emg=acc_by_emg,
+        config=cfg,
+        feature_names=feature_names,
+        time=time,
+        ica_result=ica_result,
         ica_input_feature_names=ica_input_feature_names,
     )
+
+
+def _fit_length(arr: np.ndarray, n: int) -> np.ndarray:
+    """Trim or edge-pad ``arr`` (samples down rows) to exactly ``n`` rows.
+
+    Used to fit a re-paired ACC predictor to the session's fixed sample count.
+    ACC and EMG from the same recording match within rounding once resampled to a
+    common rate, so any adjustment is a handful of tail samples.
+    """
+    m = arr.shape[0]
+    if m == n:
+        return arr
+    if m > n:
+        return arr[:n]
+    pad = [(0, n - m)] + [(0, 0)] * (arr.ndim - 1)
+    return np.pad(arr, pad, mode="edge")
+
+
+@dataclass(eq=False)
+class CleaningSession:
+    """Re-runnable EMG cleaning over one :class:`delsys.Log`, ICA fit cached.
+
+    The interactive counterpart to :func:`run_pipeline`. :meth:`from_log` does the
+    expensive setup once — gather + harmonize + preprocess + fit FastICA — and
+    :meth:`recompute` then re-derives a full :class:`CleaningResult` for any
+    IC-removal set and motion pairing *without refitting the ICA* (component
+    removal is :func:`reconstruct_without_components`; the EKG residual regression
+    and the ACC motion regression are cheap linear solves). That asymmetry is what
+    lets the component picker in :mod:`delsys.clean_review` redraw live on every
+    toggle. The source ``Log`` is held so a new motion pairing can re-resolve its
+    per-sensor ACC predictors (the motion stage is downstream of the ICA fit).
+
+    Attributes mirror the slices :func:`run_pipeline` derives internally; the
+    interesting ones for a UI are :attr:`ica` (``None`` when the ECG stage didn't
+    run), :attr:`ic_corr_scores`, and :meth:`auto_components` (the default set).
+    """
+
+    log: Any
+    config: CleaningConfig
+    sr: float
+    emg_layout: List[Tuple[Any, str]]
+    feature_names: List[str]
+    raw_emg: np.ndarray  # harmonized, baseline-shifted EMG matrix (the "raw" stage)
+    preprocessed_emg: np.ndarray  # post high/low-pass
+    ekg_1d: Optional[np.ndarray]  # harmonized EKG (the ICA input's trailing column)
+    ica: Optional[ICAResult]
+    ic_corr_scores: Optional[np.ndarray]
+    ic_best_lags: Optional[np.ndarray]
+    ica_input_feature_names: Optional[List[str]]
+    #: Resampled ACC predictors cached per motion pairing (so a component toggle
+    #: never re-resamples the accelerometers — the dominant interactive cost).
+    _acc_cache: Dict = field(default_factory=dict, init=False, repr=False)
+
+    @classmethod
+    def from_log(
+        cls, lf, *, config: Optional[CleaningConfig] = None
+    ) -> "CleaningSession":
+        """Build a session from a :class:`delsys.Log` (fits the ICA once).
+
+        Mirrors :meth:`delsys.Log.clean_emg_ekg_artifact`'s gather + harmonize +
+        preprocess, then fits FastICA on the EMG+EKG matrix. ACC is *not* gathered
+        here — it's resolved per :meth:`recompute` so the motion pairing can change.
+        """
+        cfg = CleaningConfig() if config is None else config
+        if not isinstance(cfg, CleaningConfig):
+            raise TypeError("config must be a CleaningConfig instance.")
+        if lf.emg is None:
+            raise ValueError("Log has no EMG bundle to clean.")
+
+        emg_2d, emg_sr, emg_layout, feature_names = lf._gather_emg()
+        ekg_1d, ekg_sr = lf._gather_ekg()
+
+        # Harmonize EMG + EKG only (no ACC): EMG passes through at its own rate,
+        # EKG is resampled to match. ACC is downstream of the ICA fit and is
+        # resolved/length-fit per recompute so the pairing stays editable.
+        harmonized = harmonize_multirate_inputs(
+            emg_2d=emg_2d,
+            emg_sr=emg_sr,
+            ekg_1d=ekg_1d,
+            ekg_sr=ekg_sr,
+            target_sr=emg_sr,
+        )
+        sr = float(harmonized["sr"])
+        raw_emg = np.asarray(harmonized["emg"])
+        ekg_h = harmonized["ekg"]
+
+        pre = _preprocess_emg_stage(
+            raw_emg,
+            sr=sr,
+            highpass_hz=cfg.preprocess_highpass_hz,
+            lowpass_hz=cfg.preprocess_lowpass_hz,
+            order=cfg.preprocess_order,
+        )
+
+        ica = ic_corr_scores = ic_best_lags = ica_feat = None
+        if cfg.use_ecg_stage and ekg_h is not None:
+            fit = _fit_ecg_ica(pre, ekg_h, cfg, feature_names)
+            ica = fit["ica_result"]
+            ic_corr_scores = fit["ic_corr_scores"]
+            ic_best_lags = fit["ic_best_lags"]
+            ica_feat = fit["ica_input_feature_names"]
+
+        return cls(
+            log=lf,
+            config=cfg,
+            sr=sr,
+            emg_layout=emg_layout,
+            feature_names=feature_names,
+            raw_emg=raw_emg,
+            preprocessed_emg=pre,
+            ekg_1d=ekg_h,
+            ica=ica,
+            ic_corr_scores=ic_corr_scores,
+            ic_best_lags=ic_best_lags,
+            ica_input_feature_names=ica_feat,
+        )
+
+    @property
+    def n_components(self) -> int:
+        """Number of ICA components (0 when the ECG stage didn't run)."""
+        return 0 if self.ica is None else int(self.ica.sources.shape[1])
+
+    def auto_components(self) -> List[int]:
+        """The default IC-removal set — auto-detected EKG-correlated ICs.
+
+        Combines the config's manual override with auto-detection (same as a
+        first-pass :func:`run_pipeline`); ``[]`` when the ECG stage didn't run.
+        """
+        if self.ica is None:
+            return []
+        fit = {"ica_result": self.ica, "ic_corr_scores": self.ic_corr_scores}
+        return _select_ecg_components(fit, self.config)["selected"]
+
+    def recompute(
+        self,
+        components_to_remove: Optional[Union[str, List[int]]],
+        motion: Optional[Union[str, Dict[int, Union[int, str]]]] = "auto",
+        motiononly: bool = True,
+    ) -> CleaningResult:
+        """Re-derive a :class:`CleaningResult` for a removal set + motion pairing.
+
+        Cheap: the ICA fit from :meth:`from_log` is reused, and the resampled ACC
+        predictors are cached per pairing (a component toggle never re-resamples).
+        ``components_to_remove`` is treated as an explicit (manual) set —
+        auto-detection does not re-fire — so the result reflects exactly what the
+        user picked. ``motion`` follows the same grammar as
+        :meth:`delsys.Log.clean_emg_ekg_artifact` (``"auto"`` / a
+        ``{emg_sensor: target}`` dict / ``None``). ``motiononly=False`` skips the
+        second motion-regression pass (the ``cleaned_emg_motiononly`` variant) — the
+        live picker passes ``False`` unless it's previewing that variant.
+        """
+        n = self.preprocessed_emg.shape[0]
+        stages: Dict[str, np.ndarray] = {
+            "raw": self.raw_emg,
+            "preprocessed": self.preprocessed_emg,
+        }
+        diagnostics: Dict[str, Any] = {}
+        coefficients: Dict[str, Any] = {}
+
+        if self.ica is not None:
+            remove = _normalize_component_selection(
+                components_to_remove, self.ica.sources.shape[1]
+            )
+            cleaned_emg, beta = _apply_ecg_components(
+                self.ica, self.ekg_1d, remove, self.config
+            )
+            stages["post_ecg"] = cleaned_emg
+            coefficients["ecg_regression_beta"] = beta
+            diagnostics["ecg"] = {
+                "components_removed": remove,
+                "manual_components_removed": remove,
+                "auto_ekg_components_removed": [],
+                "ic_ekg_corr_scores": self.ic_corr_scores,
+                "ic_ekg_best_lags": self.ic_best_lags,
+                "corr_threshold": self.config.ecg_corr_threshold,
+            }
+        else:
+            stages["post_ecg"] = self.preprocessed_emg
+            diagnostics["ecg"] = {"used": False}
+
+        acc_by_emg = self._acc_for_motion(motion, n)
+        result = _assemble_result(
+            stages,
+            diagnostics,
+            coefficients,
+            self.sr,
+            acc_by_emg=acc_by_emg or None,
+            config=self.config,
+            feature_names=self.feature_names,
+            time=None,
+            ica_result=self.ica,
+            ica_input_feature_names=self.ica_input_feature_names,
+            compute_motiononly=motiononly,
+        )
+        result.fname = getattr(self.log, "fname", None)
+        return result
+
+    @staticmethod
+    def _motion_key(motion):
+        """Hashable cache key for a motion pairing (dicts are unhashable)."""
+        if isinstance(motion, dict):
+            return ("dict", tuple(sorted(motion.items())))
+        return motion
+
+    def _acc_for_motion(
+        self,
+        motion: Optional[Union[str, Dict[int, Union[int, str]]]],
+        n: int,
+    ) -> Dict[int, np.ndarray]:
+        """Resolve + resample + length-fit ACC predictors for ``motion`` (cached).
+
+        Cached per pairing: resampling the accelerometers is the dominant per-call
+        cost, and the predictors are constant for a fixed pairing, so a component
+        toggle (which doesn't change the pairing) reuses them.
+        """
+        key = self._motion_key(motion)
+        cached = self._acc_cache.get(key)
+        if cached is not None:
+            return cached
+        acc_raw, acc_sr = self.log._acc_by_emg(self.emg_layout, motion)
+        acc_by_emg: Dict[int, np.ndarray] = {}
+        for col, arr in acc_raw.items():
+            res = _resample_with_pysampled(np.asarray(arr), acc_sr[col], self.sr)
+            acc_by_emg[col] = _fit_length(np.asarray(res), n)
+        self._acc_cache[key] = acc_by_emg
+        return acc_by_emg
 
 
 # ---------------------------------------------------------------------------
@@ -1168,7 +1445,7 @@ def _draw_channel_panels(
     show_motiononly: bool = True,
     show_cleaned: bool = True,
 ) -> None:
-    """Populate the three time-domain panels used by review() and per-channel pages."""
+    """Populate the three time-domain panels used by the PDF per-channel pages."""
     ax_e, ax_m, ax_c = axes
     for ax in axes:
         ax.cla()
@@ -1407,257 +1684,11 @@ def _write_report_pdf(
     return out_path
 
 
-def _open_review_window(
-    result: "CleaningResult", *, channels: Optional[List[int]] = None
-) -> None:
-    import matplotlib.pyplot as plt
-
-    raw = np.asarray(result.stages["raw"])
-    cleaned = np.asarray(result.cleaned_emg)
-    ekgonly = result.cleaned_emg_ekgonly
-    motiononly = result.cleaned_emg_motiononly
-    time = np.asarray(result.time)
-    n_ch = cleaned.shape[1]
-
-    ranked = _rank_channels_by_attenuation(raw, cleaned)
-    if channels is None:
-        order = list(ranked)
-    else:
-        order = [int(c) for c in channels]
-        for c in order:
-            if c < 0 or c >= n_ch:
-                raise ValueError(
-                    f"channel index {c} out of range (0..{n_ch - 1})."
-                )
-
-    state: Dict[str, Any] = {
-        "idx": 0,
-        "order": order,
-        "show_ekgonly": True,
-        "show_motiononly": True,
-        "show_cleaned": True,
-    }
-
-    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True, sharey=True)
-    # Stash the live state on the figure so tests (and curious power
-    # users) can introspect the viewer without going through GUI events.
-    fig._delsys_review_state = state  # type: ignore[attr-defined]
-
-    def render() -> None:
-        ch = order[state["idx"]]
-        rank_in_full = ranked.index(ch) + 1 if ch in ranked else -1
-        total_db = _channel_total_db(raw[:, ch], cleaned[:, ch])
-        motion = _motion_outcome_for_channel(result.diagnostics, ch)
-        label = _channel_label(result, ch)
-        _draw_channel_panels(
-            axes,
-            raw[:, ch],
-            ekgonly[:, ch] if ekgonly is not None else None,
-            motiononly[:, ch] if motiononly is not None else None,
-            cleaned[:, ch],
-            time,
-            show_ekgonly=state["show_ekgonly"],
-            show_motiononly=state["show_motiononly"],
-            show_cleaned=state["show_cleaned"],
-        )
-        fig.suptitle(
-            f"ch {state['idx'] + 1}/{len(order)}: {label}  "
-            f"| rank {rank_in_full}/{len(ranked)}  "
-            f"| total {total_db:+.2f} dB  | motion: {motion}",
-            fontsize=10,
-        )
-        fig.canvas.draw_idle()
-
-    def on_key(event) -> None:
-        k = getattr(event, "key", None)
-        if k in ("right", "n"):
-            state["idx"] = (state["idx"] + 1) % len(order)
-        elif k in ("left", "p"):
-            state["idx"] = (state["idx"] - 1) % len(order)
-        elif k == "home":
-            state["idx"] = 0
-        elif k == "end":
-            state["idx"] = len(order) - 1
-        elif k == "e":
-            state["show_ekgonly"] = not state["show_ekgonly"]
-        elif k == "m":
-            state["show_motiononly"] = not state["show_motiononly"]
-        elif k == "c":
-            state["show_cleaned"] = not state["show_cleaned"]
-        elif k == "o":
-            any_on = (
-                state["show_ekgonly"]
-                or state["show_motiononly"]
-                or state["show_cleaned"]
-            )
-            new_val = not any_on
-            state["show_ekgonly"] = new_val
-            state["show_motiononly"] = new_val
-            state["show_cleaned"] = new_val
-        elif k == "q":
-            plt.close(fig)
-            return
-        else:
-            return
-        render()
-
-    state["_cid"] = fig.canvas.mpl_connect("key_press_event", on_key)
-    state["_render"] = render
-    state["_on_key"] = on_key
-
-    render()
-    # ``plt.show()`` on Agg / PDF / SVG just emits a "non-GUI backend"
-    # warning — gate on the interactive-backend list so headless
-    # callers (and the test suite) stay quiet.
-    import matplotlib
-
-    if matplotlib.get_backend() in matplotlib.rcsetup.interactive_bk:
-        plt.show()
-
-
-def _component_tag(diagnostics: Dict[str, Any], component: int) -> str:
-    """Tag describing how a component was selected ("auto", "manual", ...)."""
-    ecg = diagnostics.get("ecg") or {}
-    auto = set(int(x) for x in (ecg.get("auto_ekg_components_removed") or []))
-    manual = set(int(x) for x in (ecg.get("manual_components_removed") or []))
-    in_auto = component in auto
-    in_manual = component in manual
-    if in_auto and in_manual:
-        return "auto+manual"
-    if in_auto:
-        return "auto"
-    if in_manual:
-        return "manual"
-    return "kept"
-
-
-def _open_components_review_window(
-    result: "CleaningResult", *, components: Optional[List[int]] = None
-) -> None:
-    """Stacked 4-panel viewer over the ICA components."""
-    if result.ica is None:
-        raise ValueError(
-            "review_components(): the ECG stage didn't run — no ICA result to review."
-        )
-
-    import matplotlib.pyplot as plt
-
-    ica = result.ica
-    sources = np.asarray(ica.sources)
-    mixing = np.asarray(ica.mixing)
-    n_components = sources.shape[1]
-
-    if components is None:
-        order = list(range(n_components))
-    else:
-        order = [int(c) for c in components]
-        for c in order:
-            if c < 0 or c >= n_components:
-                raise ValueError(
-                    f"component index {c} out of range (0..{n_components - 1})."
-                )
-    if not order:
-        raise ValueError("review_components(): no components to display.")
-
-    # The ICA was fit on column_stack([preprocessed_emg, ekg]); the
-    # cheapest faithful reconstruction is the inverse-transform of the
-    # full source matrix.
-    ica_input = ica.model.inverse_transform(sources)
-
-    feat_names = result.ica_input_feature_names or [
-        f"in{i}" for i in range(ica_input.shape[1])
-    ]
-    time = np.asarray(result.time)
-    if time.shape[0] != sources.shape[0]:
-        time = np.arange(sources.shape[0]) / float(result.sr)
-
-    state: Dict[str, Any] = {"idx": 0, "order": order}
-
-    fig = plt.figure(figsize=(10, 9))
-    gs = fig.add_gridspec(4, 1, hspace=0.35)
-    ax_ic = fig.add_subplot(gs[0])
-    ax_top1 = fig.add_subplot(gs[1], sharex=ax_ic)
-    ax_top2 = fig.add_subplot(gs[2], sharex=ax_ic)
-    ax_top3 = fig.add_subplot(gs[3], sharex=ax_ic)
-    contributor_axes = [ax_top1, ax_top2, ax_top3]
-    fig._delsys_components_state = state  # type: ignore[attr-defined]
-
-    def render() -> None:
-        c = order[state["idx"]]
-        for ax in (ax_ic, *contributor_axes):
-            ax.cla()
-        ax_ic.plot(time, sources[:, c], color="C3", lw=0.6)
-        ax_ic.set_ylabel(f"IC {c}")
-
-        col = mixing[:, c]
-        ranking = np.argsort(np.abs(col))[::-1]
-        for slot, ax in enumerate(contributor_axes):
-            if slot >= len(ranking):
-                ax.text(
-                    0.5, 0.5, "(no further contributor)",
-                    transform=ax.transAxes, ha="center", va="center", color="0.4",
-                )
-                continue
-            row = int(ranking[slot])
-            label = feat_names[row] if 0 <= row < len(feat_names) else f"in{row}"
-            weight = float(col[row])
-            ax.plot(time, ica_input[:, row], color="0.3", lw=0.6)
-            ax.set_ylabel(f"#{slot + 1}: {label}")
-            ax.set_title(
-                f"top contributor #{slot + 1}: {label}  (|A|={abs(weight):.3f})",
-                fontsize=8, loc="left",
-            )
-        ax_top3.set_xlabel("time (s)")
-
-        ecg_diag = result.diagnostics.get("ecg") or {}
-        scores = ecg_diag.get("ic_ekg_corr_scores")
-        lags = ecg_diag.get("ic_ekg_best_lags")
-        score_str = (
-            f"{float(np.asarray(scores)[c]):.2f}" if scores is not None else "n/a"
-        )
-        lag_str = (
-            f"{int(np.asarray(lags)[c]):+d}" if lags is not None else "n/a"
-        )
-        tag = _component_tag(result.diagnostics, c)
-        fig.suptitle(
-            f"IC {state['idx'] + 1}/{len(order)}: index={c}  "
-            f"| corr_score={score_str}  | lag={lag_str}  | tagged: {tag}",
-            fontsize=10,
-        )
-        fig.canvas.draw_idle()
-
-    def on_key(event) -> None:
-        k = getattr(event, "key", None)
-        if k in ("right", "n"):
-            state["idx"] = (state["idx"] + 1) % len(order)
-        elif k in ("left", "p"):
-            state["idx"] = (state["idx"] - 1) % len(order)
-        elif k == "home":
-            state["idx"] = 0
-        elif k == "end":
-            state["idx"] = len(order) - 1
-        elif k == "q":
-            plt.close(fig)
-            return
-        else:
-            return
-        render()
-
-    state["_cid"] = fig.canvas.mpl_connect("key_press_event", on_key)
-    state["_render"] = render
-    state["_on_key"] = on_key
-
-    render()
-    import matplotlib
-
-    if matplotlib.get_backend() in matplotlib.rcsetup.interactive_bk:
-        plt.show()
-
-
 __all__ = [
     "ICAResult",
     "CleaningConfig",
     "CleaningResult",
+    "CleaningSession",
     "fit_ica",
     "score_components_against_ekg",
     "auto_select_ekg_components",

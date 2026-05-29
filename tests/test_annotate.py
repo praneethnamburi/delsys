@@ -160,22 +160,18 @@ def test_annotate_auto_limits_on_by_default(fixtures_dir, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sensor_view_marks_modality_window(fixtures_dir, tmp_path):
-    """Pressing '1' twice over a modality subplot adds a whole-modality window."""
+def test_sensor_view_marks_panel_window(fixtures_dir, tmp_path):
+    """Two '1' presses over a sensor-view panel add a window on that panel's address."""
     lf = _log(fixtures_dir, tmp_path)
     ann = lf.annotate_noise(view="sensor")
     ann._current_idx = 0
-    ann.update()  # build subplots / _subplot_axes for sensor 0
-    mod = next(iter(ann._subplot_axes))
-    ax = ann._subplot_axes[mod]
+    ann.update()  # build panels / _panel_axes for sensor 0
+    ax, key = ann._panel_axes[0]
     ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.02))
     ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.05))
 
-    key = ann._modality_key_for(ann._sensors[0], mod)
-    doc = read_noise_sidecar(ann.save())
-    saved = {key_address(k): v for k, v in doc["signals"].items()}
-    assert saved[key]["windows"] == [[0.02, 0.05]]
-    assert parse_key(key).coord is None  # whole-modality (coord-less) address
+    saved = {key_address(k): v for k, v in read_noise_sidecar(ann.save())["signals"].items()}
+    assert saved[key_address(key)]["windows"] == [[0.02, 0.05]]
 
 
 def test_sensor_view_shares_sidecar_with_signal_view(fixtures_dir, tmp_path):
@@ -190,13 +186,54 @@ def test_sensor_view_dead_toggle(fixtures_dir, tmp_path):
     lf = _log(fixtures_dir, tmp_path)
     ann = lf.annotate_noise(view="sensor")
     ann._current_idx = 0
-    mod = next(iter(ann._subplot_axes))
-    ann._toggle_dead_at(SimpleNamespace(inaxes=ann._subplot_axes[mod], xdata=0.0))
+    ann.update()
+    ax, key = ann._panel_axes[0]
+    ann._toggle_dead_at(SimpleNamespace(inaxes=ax, xdata=0.0))
 
-    key = ann._modality_key_for(ann._sensors[0], mod)
-    doc = read_noise_sidecar(ann.save())
-    saved = {key_address(k): v for k, v in doc["signals"].items()}
-    assert saved[key]["dead"] == [[None, None]]
+    saved = {key_address(k): v for k, v in read_noise_sidecar(ann.save())["signals"].items()}
+    assert saved[key_address(key)]["dead"] == [[None, None]]
+
+
+def test_sensor_view_splits_quattro_fsr_analog_into_subchannels(fixtures_dir, tmp_path):
+    """EMGQ / FSR / Analog get one coord-ful panel per present sub-channel."""
+    from delsys.annotate import _SPLIT_MODALITIES
+
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise(view="sensor")
+    found_multi = False
+    for i, s in enumerate(ann._sensors):
+        split_mods = [m for m in ann._markable_modalities(s) if m in _SPLIT_MODALITIES]
+        if not split_mods:
+            continue
+        ann._current_idx = i
+        ann.update()
+        for m in split_mods:
+            n_sig = sum(1 for sg in lf.signals if sg.matches(s.number, m, None))
+            panel_keys = [k for _, k in ann._panel_axes if parse_key(k).modality == m]
+            assert len(panel_keys) == n_sig  # one panel per sub-channel
+            assert all(parse_key(k).coord is not None for k in panel_keys)
+            if n_sig > 1:
+                found_multi = True
+    if not found_multi:
+        pytest.skip("fixture has no split modality with >1 sub-channel")
+
+
+def test_sensor_scope_marks_across_all_modalities(fixtures_dir, tmp_path):
+    """With Sensor scope on, a mark lands on every modality of the sensor."""
+    lf = _log(fixtures_dir, tmp_path)
+    ann = lf.annotate_noise(view="sensor")
+    ann._current_idx = 0
+    ann.update()
+    ann.buttons["Sensor scope"].set_state(True)
+    ax, _ = ann._panel_axes[0]
+    ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.02))
+    ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.05))
+
+    sensor = ann._sensors[0]
+    saved = {key_address(k): v for k, v in read_noise_sidecar(ann.save())["signals"].items()}
+    for m in ann._markable_modalities(sensor):
+        mk = key_address(ann._modality_key_for(sensor, m))
+        assert saved[mk]["windows"] == [[0.02, 0.05]]
 
 
 def test_annotate_invalid_view_rejected(fixtures_dir, tmp_path):

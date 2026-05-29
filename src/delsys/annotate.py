@@ -57,6 +57,12 @@ _MODALITY_UNITS = {
 #: Modalities the sensor-centric view stacks as subplots, in display order.
 _MARKABLE_ORDER = ("EMGS", "EMGD", "EMGQ", "EKG", "ACC", "GYRO", "FSR", "Analog")
 
+#: Modalities shown as one subplot *per sub-channel* in the sensor view (so each
+#: can be marked individually). The rest (EMGS/EKG single-trace; ACC/GYRO X/Y/Z)
+#: stay as one overlaid whole-modality subplot. Sub-channel count is read from the
+#: actual signals present, so e.g. a single-trace Sync (Analog) shows one panel.
+_SPLIT_MODALITIES = ("EMGQ", "FSR", "Analog")
+
 
 class _NoiseMarkingMixin:
     """Shared noise-marking state + actions over a ``.delsys-noise`` sidecar.
@@ -111,36 +117,54 @@ class _NoiseMarkingMixin:
             for addr, v in self._ann.items()
             if v.get("windows") or v.get("dead")
         }
-        return _noise.write_noise_sidecar(self._sidecar_path, payload)
+        path = _noise.write_noise_sidecar(self._sidecar_path, payload)
+        print(f"delsys.annotate_noise: saved {len(payload)} marked address(es) -> {path}")
+        return path
+
+    # -- scope expansion (view hook) --------------------------------------
+
+    def _scope_keys(self, key: str) -> List[str]:
+        """Addresses a marking action targets, given the cursor's ``key``.
+
+        Defaults to the single ``key`` (the signal view, whose ``Mod scope``
+        toggle already resolves which single key). The sensor view overrides this
+        to fan a mark out across every modality of the sensor when its
+        ``Sensor scope`` toggle is on.
+        """
+        return [key]
 
     # -- key-addressed actions (the cores; each redraws) ------------------
 
     def _mark_window(self, key: str, a: float, b: float) -> None:
         a, b = float(min(a, b)), float(max(a, b))
         if b > a:
-            self._slot(key)["windows"].append([a, b])
+            for k in self._scope_keys(key):
+                self._slot(k)["windows"].append([a, b])
         self.update()
 
     def _remove_nearest(self, key: str, x: float) -> None:
-        slot = self._ann.get(key)
-        windows = slot["windows"] if slot else []
-        if windows:
-            i = min(range(len(windows)), key=lambda i: abs(sum(windows[i]) / 2 - x))
-            windows.pop(i)
+        for k in self._scope_keys(key):
+            slot = self._ann.get(k)
+            windows = slot["windows"] if slot else []
+            if windows:
+                i = min(range(len(windows)), key=lambda i: abs(sum(windows[i]) / 2 - x))
+                windows.pop(i)
         self.update()
 
     def _toggle_dead(self, key: str) -> None:
-        dead = self._slot(key)["dead"]
-        if _WHOLE_EXTENT in dead:
-            dead.remove(_WHOLE_EXTENT)
-        else:
-            dead.append(list(_WHOLE_EXTENT))
+        for k in self._scope_keys(key):
+            dead = self._slot(k)["dead"]
+            if _WHOLE_EXTENT in dead:
+                dead.remove(_WHOLE_EXTENT)
+            else:
+                dead.append(list(_WHOLE_EXTENT))
         self.update()
 
     def _drop_last(self, key: str) -> None:
-        slot = self._ann.get(key)
-        if slot and slot["windows"]:
-            slot["windows"].pop()
+        for k in self._scope_keys(key):
+            slot = self._ann.get(k)
+            if slot and slot["windows"]:
+                slot["windows"].pop()
         self.update()
 
     # -- cursor-driven keypress handlers (use _key_for_event) -------------
@@ -173,9 +197,12 @@ class _NoiseMarkingMixin:
 
     def _add_noise_keybindings(self, dead_key: Optional[str] = None) -> None:
         """Wire the marking keys + Save button. Frees digit keys from memoryslots."""
-        # GenericBrowser otherwise treats 1-9 as memory slots (storing
-        # _current_idx); we don't use those, and need '1' for marking.
+        # GenericBrowser treats 1-9 as memory slots (storing _current_idx) and
+        # re-shows the widget on every redraw; disable + neutralize the re-show so
+        # the slots are gone and '1' is free for marking.
         self.memoryslots.disable()
+        self.memoryslots.hide()
+        self.memoryslots.show = lambda *a, **k: None
         self.add_key_binding("1", self._mark_point, description="Add noise window (2 presses)")
         self.add_key_binding(
             "alt+1", self._remove_window, description="Remove nearest noise window"
@@ -312,13 +339,22 @@ def _build_sensor_annotator_class():
     from datanavigator.plots import PlotBrowser
 
     class SensorNoiseAnnotator(_NoiseMarkingMixin, PlotBrowser):
-        """PlotBrowser showing one sensor's modalities stacked; marks whole-modality
-        noise into the shared ``.delsys-noise`` sidecar."""
+        """PlotBrowser showing one sensor's modalities stacked into time-aligned
+        subplots, marking noise into the shared ``.delsys-noise`` sidecar.
+
+        EMGQ / FSR / Analog get one subplot **per sub-channel** (so each Quattro
+        channel, FSR pad, or Sync line — and a Sync that carries only one line — can
+        be marked individually); EMGS/EKG (single trace) and ACC/GYRO (X/Y/Z
+        overlaid) stay as one whole-modality subplot. A sensor that mixes, say, EMGQ
+        with ACC/GYRO shows all of them. Marking targets the hovered subplot's
+        address; the **Sensor scope** toggle instead fans the mark across every
+        modality of the sensor (a wall-clock noise burst hits them all).
+        """
 
         def __init__(self, lf, path: Optional[str] = None, figure_handle=None) -> None:
             self._init_noise_state(lf, path)
             self._sensors = [s for s in lf.sensors if self._markable_modalities(s)]
-            self._subplot_axes: Dict[str, object] = {}  # modality -> Axes (per update)
+            self._panel_axes: List = []  # [(Axes, key)] per update
             item_names = [self._sensor_label(s) for s in self._sensors]
             if figure_handle is None:
                 figure_handle = plt.figure(figsize=(14, 8))
@@ -352,44 +388,84 @@ def _build_sensor_annotator_class():
 
         @staticmethod
         def _modality_key_for(sensor, modality: str) -> str:
-            # Address (label-free); save() re-labels from the Log.
+            # Whole-modality address (label-free); save() re-labels from the Log.
             return _noise.format_key(sensor.number, modality, None)
+
+        def _panel_specs(self, sensor):
+            """Build the stacked-panel layout: ``[(key, ylabel, [(t, y), ...]), ...]``.
+
+            Split modalities contribute one spec per present sub-channel (keyed by
+            its coord); the rest contribute one whole-modality spec (coord-less key,
+            all sub-channels overlaid).
+            """
+            specs = []
+            for mod in self._markable_modalities(sensor):
+                unit = _MODALITY_UNITS.get(mod, "a.u.")
+                if mod in _SPLIT_MODALITIES:
+                    sigs = [s for s in self._lf.signals if s.matches(sensor.number, mod, None)]
+                    for sig in sigs:
+                        key = _noise.format_key(sensor.number, mod, sig.subchannel)
+                        specs.append((key, f"{mod}.{sig.subchannel}\n({unit})", [(sig.t, sig())]))
+                else:
+                    bundle = getattr(sensor, _mod_to_attr(mod), None)
+                    traces = [(bundle.t, bundle())] if bundle is not None else []
+                    specs.append((self._modality_key_for(sensor, mod), f"{mod} ({unit})", traces))
+            return specs
 
         def _key_for_event(self, event) -> Optional[str]:
             ax = getattr(event, "inaxes", None)
             if ax is None:
                 return None
-            sensor = self._sensors[self._current_idx]
-            for mod, mod_ax in self._subplot_axes.items():
-                if mod_ax is ax:
-                    return self._modality_key_for(sensor, mod)
+            for pax, key in self._panel_axes:
+                if pax is ax:
+                    return key
             return None
+
+        # -- scope --------------------------------------------------------
+
+        @property
+        def _sensor_scope(self) -> bool:
+            """Whether a mark fans across the whole sensor (all its modalities)."""
+            return "Sensor scope" in self.buttons and self.buttons["Sensor scope"].state
+
+        def _scope_keys(self, key: str) -> List[str]:
+            if not self._sensor_scope:
+                return [key]
+            sensor = self._sensors[self._current_idx]
+            return [self._modality_key_for(sensor, m) for m in self._markable_modalities(sensor)]
 
         # -- controls + view ----------------------------------------------
 
         def _add_controls(self) -> None:
             self._add_noise_keybindings(dead_key="d")
+            # Off -> mark the hovered sub-channel/modality; On -> the whole sensor.
+            self.buttons.add(text="Sensor scope", type_="Toggle", start_state=False)
 
         def _plot_sensor(self, sensor, figure, **kwargs) -> None:
-            """Draw one sensor's modalities as stacked, time-aligned subplots."""
-            mods = self._markable_modalities(sensor)
-            axes = figure.subplots(len(mods), 1, sharex=True, squeeze=False)[:, 0]
-            self._subplot_axes = {}
-            for ax, mod in zip(axes, mods):
-                bundle = getattr(sensor, _mod_to_attr(mod), None)
-                if bundle is not None:
-                    ax.plot(bundle.t, bundle())
-                ax.set_ylabel(f"{mod} ({_MODALITY_UNITS.get(mod, 'a.u.')})")
-                self._subplot_axes[mod] = ax
+            """Draw one sensor's per-sub-channel / per-modality stacked subplots."""
+            specs = self._panel_specs(sensor)
+            axes = figure.subplots(max(len(specs), 1), 1, sharex=True, squeeze=False)[:, 0]
+            self._panel_axes = []
+            for ax, (key, ylabel, traces) in zip(axes, specs):
+                for t, y in traces:
+                    ax.plot(t, y, lw=0.7)
+                ax.set_ylabel(ylabel)
+                self._panel_axes.append((ax, key))
             axes[-1].set_xlabel("time (s)")
             figure.suptitle(self._sensor_label(sensor))
 
         def update(self, event=None) -> None:
             super().update(event)  # PlotBrowser: clear + _plot_sensor (sets axes) + draw
             self._clear_overlays()
-            sensor = self._sensors[self._current_idx]
-            for mod, ax in self._subplot_axes.items():
-                self._draw_key_spans(ax, self._modality_key_for(sensor, mod), "tab:red")
+            for ax, key in self._panel_axes:
+                # Own (coord-ful or whole-modality) windows in red; for a
+                # sub-channel panel also show the whole-modality windows (orange).
+                self._draw_key_spans(ax, key, "tab:red")
+                pk = _noise.parse_key(key)
+                if pk.coord is not None:
+                    self._draw_key_spans(
+                        ax, _noise.format_key(pk.sensor, pk.modality), "tab:orange"
+                    )
             plt.draw()
 
     return SensorNoiseAnnotator

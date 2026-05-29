@@ -603,6 +603,49 @@ class Log:
 
         return launch_noise_annotator(self, path, view=view)
 
+    def clean(self, *, config: Optional[CleaningConfig] = None):
+        """Open the interactive ECG/ICA cleaner over this Log.
+
+        The single-log interactive counterpart to :func:`delsys.clean` (which
+        cleans a *folder* in batch). Note this opens a GUI and returns the browser;
+        for headless/programmatic single-log cleaning use
+        :meth:`clean_emg_ekg_artifact` (one-shot, in place) instead.
+
+        Fits the ICA once (via :class:`delsys.cleaning.CleaningSession`), then opens
+        a two-region window: an all-components EKG-correlation bar (click a bar to
+        toggle that IC's removal) with the clicked IC's detail, and a channel
+        reviewer (raw vs the chosen cleaned variant). A single Motion auto/off toggle
+        and a splice selector drive the rest. **Save** writes the decision to the
+        sibling ``<stem>.delsys-artifact`` that :func:`delsys.clean` replays. The
+        unified successor to the old ``CleaningResult.review`` / ``review_components``
+        viewers; ``datanavigator`` is imported lazily here so the delsys core stays
+        datanavigator-free until this method is called.
+
+        A sibling ``<stem>.delsys-noise`` sidecar (authored via
+        :meth:`annotate_noise`) is consumed automatically when :func:`delsys.clean`
+        later regenerates the cleaned snapshot, so mark noise *first*, then open the
+        cleaner.
+
+        Args:
+            config: Pipeline knobs (defaults to :class:`CleaningConfig`'s
+                defaults). The cleaner needs an EKG reference and the ECG stage
+                on; it raises :class:`ValueError` when there are no ICA components
+                to pick.
+
+        Returns:
+            The cleaner instance (a ``datanavigator`` ``PlotBrowser`` subclass).
+        """
+        from delsys.cleaning import CleaningSession
+        from delsys.clean_review import launch_clean_reviewer
+
+        print(f"delsys.clean: loading + fitting ICA for {self.fname} (one-time) …")
+        session = CleaningSession.from_log(self, config=config)
+        print(
+            f"delsys.clean: ICA fit done ({session.n_components} components); "
+            "opening the cleaner …"
+        )
+        return launch_clean_reviewer(session)
+
     def clean_emg_ekg_artifact(
         self,
         *,
@@ -725,57 +768,9 @@ class Log:
 
             _check_report_path_writable(self.fname)
 
-        # Shift the baseline up front so the per-channel dB metrics in
-        # the report reflect the cleaning's effect on the AC signal rather
-        # than a constant offset in the raw input. This also feeds a
-        # better-conditioned matrix into FastICA.
-        emg_bundle = self.emg.shift_baseline()
-        emg_sr = float(emg_bundle.sr)
-        emg_2d = np.asarray(emg_bundle())
-
-        # Per-sensor channel layout in the aggregate EMG matrix: each EMG
-        # sensor contributes ``len(SUBCHANNEL_MAP[mod])`` columns in
-        # ``Log.sensors`` order (matching ``_aggregate_bundles`` /
-        # ``Sensor.__init__``). Cache this so the splice-back, the
-        # feature_names list, and the acc_by_emg map all index by the
-        # same column ordering.
-        emg_layout: List[Tuple[Any, str]] = []  # (sensor, modality) per EMG sensor
-        feature_names: List[str] = []
-        for sensor in self.sensors:
-            mod = next((m for m in sensor.modalities if m.startswith("EMG")), None)
-            if mod is None:
-                continue
-            emg_layout.append((sensor, mod))
-            feature_names.extend(sensor.emg.signal_names)
-
-        # EKG reference: collapse to 1-D. Multi-EKG logs use the first
-        # column — a deliberate simplification; users wanting to mix
-        # multiple EKG references can pre-process and pass the result
-        # through delsys.cleaning.run_pipeline directly.
-        ekg_1d: Optional[np.ndarray] = None
-        ekg_sr: Optional[float] = None
-        if self.ekg is not None:
-            ekg_arr = np.asarray(self.ekg())
-            ekg_1d = ekg_arr if ekg_arr.ndim == 1 else ekg_arr[:, 0]
-            ekg_sr = float(self.ekg.sr)
-
-        # Resolve the per-EMG-sensor ACC predictor according to ``motion``.
-        # Build acc_by_emg keyed by *EMG column index* in ``emg_2d``;
-        # all sub-channels of one EMG sensor share the same predictor.
-        acc_by_emg: Dict[int, np.ndarray] = {}
-        acc_sr: Dict[int, float] = {}
-        if motion is not None:
-            col_idx = 0
-            for sensor, mod in emg_layout:
-                n_subch = len(SUBCHANNEL_MAP[mod])
-                acc_sensor = self._resolve_acc_for_emg(sensor, motion)
-                if acc_sensor is not None and hasattr(acc_sensor, "acc"):
-                    acc_arr = np.asarray(acc_sensor.acc())
-                    rate = float(acc_sensor.acc.sr)
-                    for k in range(n_subch):
-                        acc_by_emg[col_idx + k] = acc_arr
-                        acc_sr[col_idx + k] = rate
-                col_idx += n_subch
+        emg_2d, emg_sr, emg_layout, feature_names = self._gather_emg()
+        ekg_1d, ekg_sr = self._gather_ekg()
+        acc_by_emg, acc_sr = self._acc_by_emg(emg_layout, motion)
 
         harmonized = harmonize_multirate_inputs(
             emg_2d=emg_2d,
@@ -829,6 +824,79 @@ class Log:
             result.generate_report()
 
         return result
+
+    def _gather_emg(self) -> Tuple[np.ndarray, float, List[Tuple[Any, str]], List[str]]:
+        """Gather the aggregate EMG matrix + per-sensor column layout.
+
+        Shared by :meth:`clean_emg_ekg_artifact` and
+        :meth:`delsys.cleaning.CleaningSession.from_log`. Shifts the baseline up
+        front so the per-channel dB metrics reflect the cleaning's effect on the
+        AC signal rather than a DC offset in the raw input (and feeds a
+        better-conditioned matrix into FastICA).
+
+        Returns ``(emg_2d, emg_sr, emg_layout, feature_names)`` where
+        ``emg_layout`` is the ``(sensor, modality)`` list (one per EMG sensor, in
+        ``Log.sensors`` order — matching ``_aggregate_bundles`` /
+        ``Sensor.__init__``) that the splice-back, ``feature_names``, and the
+        ``acc_by_emg`` map all index by.
+        """
+        emg_bundle = self.emg.shift_baseline()
+        emg_sr = float(emg_bundle.sr)
+        emg_2d = np.asarray(emg_bundle())
+
+        emg_layout: List[Tuple[Any, str]] = []
+        feature_names: List[str] = []
+        for sensor in self.sensors:
+            mod = next((m for m in sensor.modalities if m.startswith("EMG")), None)
+            if mod is None:
+                continue
+            emg_layout.append((sensor, mod))
+            feature_names.extend(sensor.emg.signal_names)
+        return emg_2d, emg_sr, emg_layout, feature_names
+
+    def _gather_ekg(self) -> Tuple[Optional[np.ndarray], Optional[float]]:
+        """Gather the EKG reference, collapsed to 1-D.
+
+        Multi-EKG logs use the first column — a deliberate simplification; users
+        wanting to mix multiple EKG references can pre-process and pass the result
+        through :func:`delsys.cleaning.run_pipeline` directly. Returns
+        ``(ekg_1d, ekg_sr)`` — ``(None, None)`` when the Log carries no EKG.
+        """
+        if self.ekg is None:
+            return None, None
+        ekg_arr = np.asarray(self.ekg())
+        ekg_1d = ekg_arr if ekg_arr.ndim == 1 else ekg_arr[:, 0]
+        return ekg_1d, float(self.ekg.sr)
+
+    def _acc_by_emg(
+        self,
+        emg_layout: List[Tuple[Any, str]],
+        motion: Optional[Union[str, Dict[int, Union[int, str]]]],
+    ) -> Tuple[Dict[int, np.ndarray], Dict[int, float]]:
+        """Resolve the per-EMG-sensor ACC predictor according to ``motion``.
+
+        Builds ``acc_by_emg`` keyed by *EMG column index* in the aggregate EMG
+        matrix (all sub-channels of one EMG sensor share the same predictor), plus
+        the parallel ``acc_sr`` map. ``motion=None`` skips the motion stage
+        (returns empty maps). Re-callable with a different ``motion`` to re-pair
+        interactively (the ACC streams are downstream of the ECG/ICA stage).
+        """
+        acc_by_emg: Dict[int, np.ndarray] = {}
+        acc_sr: Dict[int, float] = {}
+        if motion is None:
+            return acc_by_emg, acc_sr
+        col_idx = 0
+        for sensor, mod in emg_layout:
+            n_subch = len(SUBCHANNEL_MAP[mod])
+            acc_sensor = self._resolve_acc_for_emg(sensor, motion)
+            if acc_sensor is not None and hasattr(acc_sensor, "acc"):
+                acc_arr = np.asarray(acc_sensor.acc())
+                rate = float(acc_sensor.acc.sr)
+                for k in range(n_subch):
+                    acc_by_emg[col_idx + k] = acc_arr
+                    acc_sr[col_idx + k] = rate
+            col_idx += n_subch
+        return acc_by_emg, acc_sr
 
     def _resolve_acc_for_emg(
         self,

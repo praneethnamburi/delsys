@@ -51,7 +51,7 @@ from delsys._constants import (
     TARGET_SR,
 )
 from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
-from delsys.cleaning import CleaningConfig, CleaningResult
+from delsys.cleaning import CleaningConfig, CleaningResult, CleaningSession
 from delsys.ekg import EKG
 from delsys.emg import EMG
 from delsys._clean import clean
@@ -87,6 +87,7 @@ __all__ = [
     # cleaning containers
     "CleaningConfig",
     "CleaningResult",
+    "CleaningSession",
     # constants
     "TARGET_SR",
     "SUBCHANNEL_MAP",

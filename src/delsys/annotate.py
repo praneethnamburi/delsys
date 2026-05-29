@@ -79,25 +79,37 @@ class _NoiseMarkingMixin:
         self._overlay_artists: list = []
 
     def _load_existing(self) -> Dict[str, dict]:
-        """Seed the in-memory state from an existing sidecar, if present."""
+        """Seed the in-memory state from an existing sidecar, if present.
+
+        Keyed by structural **address** (label stripped) so a sidecar written
+        with any label — including an older code version's placeholder — still
+        matches the signals on render. Entries that collapse to the same address
+        are merged.
+        """
         ann: Dict[str, dict] = {}
         if os.path.exists(self._sidecar_path):
             doc = _noise.read_noise_sidecar(self._sidecar_path)
             for key, val in (doc.get("signals") or {}).items():
                 windows, dead = _noise._normalize_signal_value(val)
-                ann[key] = {
-                    "windows": [[a, b] for a, b in windows],
-                    "dead": [[a, b] for a, b in dead],
-                }
+                slot = ann.setdefault(_noise.key_address(key), {"windows": [], "dead": []})
+                slot["windows"].extend([a, b] for a, b in windows)
+                slot["dead"].extend([a, b] for a, b in dead)
         return ann
 
     def _slot(self, key: str) -> dict:
         return self._ann.setdefault(key, {"windows": [], "dead": []})
 
     def save(self, event=None) -> str:
-        """Write the sidecar (dropping empty entries). Returns the path."""
+        """Write the sidecar (dropping empty entries). Returns the path.
+
+        ``_ann`` is keyed by address; each is re-labelled from the current Log on
+        the way out, so the file stays human-readable (and a stale-labelled
+        sidecar is self-healed).
+        """
         payload = {
-            k: v for k, v in self._ann.items() if v.get("windows") or v.get("dead")
+            _noise.relabel_key(self._lf, addr): v
+            for addr, v in self._ann.items()
+            if v.get("windows") or v.get("dead")
         }
         return _noise.write_noise_sidecar(self._sidecar_path, payload)
 
@@ -238,11 +250,12 @@ def _build_signal_annotator_class():
             return "Mod scope" in self.buttons and self.buttons["Mod scope"].state
 
         def _channel_key(self) -> str:
-            return self._keys[self._current_idx]
+            # Address (label stripped); self._keys keeps the label for display.
+            return _noise.key_address(self._keys[self._current_idx])
 
         def _modality_key(self) -> str:
-            return _noise.format_signal_key(
-                self._signals[self._current_idx], include_coord=False
+            return _noise.key_address(
+                _noise.format_signal_key(self._signals[self._current_idx], include_coord=False)
             )
 
         def _current_key(self) -> str:
@@ -339,8 +352,8 @@ def _build_sensor_annotator_class():
 
         @staticmethod
         def _modality_key_for(sensor, modality: str) -> str:
-            loc = _trim_location(sensor.location, sensor.number)
-            return _noise.format_key(sensor.number, modality, None, loc)
+            # Address (label-free); save() re-labels from the Log.
+            return _noise.format_key(sensor.number, modality, None)
 
         def _key_for_event(self, event) -> Optional[str]:
             ax = getattr(event, "inaxes", None)

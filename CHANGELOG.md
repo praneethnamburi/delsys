@@ -132,7 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and press **`1`** (two presses fix a window's start/end), **`alt+1`** to remove
   the nearest; **Save noise** button (auto-seeded from an existing sidecar on
   open). Marks are shaded on the trace; opens wide, auto-scaling, with labelled
-  axes (`time (s)` / `<modality> (<unit>)`).
+  axes (`time (s)` / `<modality> (<unit>)`). Annotations are indexed by
+  structural **address** (label-free), so a sidecar from a previous session
+  renders even if its keys carry a different/older `| <label>`; saving re-attaches
+  the current label.
   - **`view="signal"`** (default) — `SignalBrowser` subclass: flip through every
     channel via the dropdown; a **Mod scope** toggle records against the channel
     (coord-ful) or whole sensor+modality (coord-less); **Toggle dead** / **Undo

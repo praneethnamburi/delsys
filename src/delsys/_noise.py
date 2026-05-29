@@ -343,6 +343,34 @@ def format_signal_key(sig, *, include_coord: bool = True) -> str:
     )
 
 
+def key_address(key: str) -> str:
+    """Strip a key to its structural address ``"<sensor>.<modality>[.<coord>]"``.
+
+    Drops the informational ``" | <label>"`` so two keys that differ only in
+    label (e.g. after a relabel, or an older code version's placeholder) collapse
+    to one. This is the stable identity to index annotations by — the label must
+    never be load-bearing for lookup (only :func:`resolve_key` against a Log is
+    authoritative).
+    """
+    pk = parse_key(key)
+    return format_key(pk.sensor, pk.modality, pk.coord)
+
+
+def relabel_key(lf, key: str) -> str:
+    """Re-attach a current, human-readable label to ``key``'s address.
+
+    Resolves the address against ``lf`` and rebuilds the full
+    ``"<address> | <label>"`` from the matching signal (so a hand-edited or
+    stale-labelled sidecar is rewritten with the right label on save). Falls back
+    to the bare address when nothing on ``lf`` matches.
+    """
+    pk = parse_key(key)
+    idxs = resolve_key(lf, key)
+    if idxs:
+        return format_signal_key(lf.signals[idxs[0]], include_coord=pk.coord is not None)
+    return format_key(pk.sensor, pk.modality, pk.coord)
+
+
 def resolve_key(lf, key: str) -> List[int]:
     """Resolve a sidecar key to the matching indices in ``lf.signals``.
 

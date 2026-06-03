@@ -470,18 +470,19 @@ def write_noise_sidecar(path: str, signals: Dict[str, object]) -> str:
     return path
 
 
-def apply_noise_sidecar(lf, path: str, *, policy: str = "nan_interp") -> int:
-    """Read a ``<stem>.delsys-noise`` sidecar and mask ``lf`` per signal address.
+def _apply_noise_signal_map(lf, signals: Dict[str, object], *, policy: str = "nan_interp") -> int:
+    """Resolve a ``{address-key: value}`` noise map onto ``lf`` and mask it.
 
-    Each key is resolved to concrete signal columns (:func:`resolve_key`) and
-    its windows / dead spans are accumulated onto those columns, then applied via
-    :func:`_mask_signals`. Keys that resolve to nothing on this Log are skipped.
+    The shared core behind the legacy :func:`apply_noise_sidecar` and the unified
+    :func:`delsys._events.apply_events_noise`. Each key is resolved to concrete
+    signal columns (:func:`resolve_key`) and its windows / dead spans are
+    accumulated onto those columns, then applied via :func:`_mask_signals`. Keys
+    that resolve to nothing on this Log are skipped.
 
     Returns the number of signals touched.
     """
-    doc = read_noise_sidecar(path)
     spec_by_index: Dict[int, dict] = {}
-    for key, val in (doc.get("signals") or {}).items():
+    for key, val in (signals or {}).items():
         windows, dead = _normalize_signal_value(val)
         if not windows and not dead:
             continue
@@ -490,6 +491,16 @@ def apply_noise_sidecar(lf, path: str, *, policy: str = "nan_interp") -> int:
             slot["windows"].extend(windows)
             slot["dead"].extend(dead)
     return _mask_signals(lf, spec_by_index, policy=policy)
+
+
+def apply_noise_sidecar(lf, path: str, *, policy: str = "nan_interp") -> int:
+    """Read a ``<stem>.delsys-noise`` sidecar and mask ``lf`` per signal address.
+
+    Thin wrapper over :func:`_apply_noise_signal_map` reading the legacy
+    per-signal sidecar. Returns the number of signals touched.
+    """
+    doc = read_noise_sidecar(path)
+    return _apply_noise_signal_map(lf, doc.get("signals") or {}, policy=policy)
 
 
 def _rebuild_sensors(lf) -> None:

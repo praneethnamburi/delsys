@@ -7,8 +7,11 @@ snapshot (idempotently), write a per-trial PDF report next to the checkpoint, an
 return a ``{path: status}`` dict. The two kinds of cleaning have separate owners,
 each with its own per-log sidecar that travels with the ``.h5``:
 
-- ``<stem>.delsys-noise`` — *human* noise-window / dead-channel marks, authored in
-  the annotator and merely *consumed* here (see :mod:`delsys._noise`).
+- ``<stem>.delsys-events`` — *human* annotations: noise-window / dead-channel marks
+  (the ``noise`` type) plus typed marker tracks, authored in the annotator and
+  merely *consumed* here (see :mod:`delsys._events`). A legacy per-signal
+  ``<stem>.delsys-noise`` (see :mod:`delsys._noise`) is still read when no unified
+  file is present.
 - ``<stem>.delsys-artifact`` — the *algorithmic* cleaning decision (ICA components
   to remove, which cleaned variant to splice, the motion pairing, an optional
   noise reference, and the rest of the :class:`delsys.CleaningConfig` knob set).
@@ -210,6 +213,43 @@ def _resolve_noise_ref(noise_ref: Any, raw_h5: str) -> Tuple[Optional[str], Any]
     return path, key
 
 
+def _default_noise_ref(target: str) -> Optional[str]:
+    """Sibling annotation sidecar to consume by default (as a basename), or ``None``.
+
+    Prefers the unified ``<stem>.delsys-events`` when it carries a ``noise`` type;
+    falls back to a legacy ``<stem>.delsys-noise``. Stored as provenance in the
+    decision's ``noise_event_ref`` so a replay re-consumes the same marks.
+    """
+    from delsys import _events, _noise
+
+    events_path = _events.events_path_for(target)
+    if os.path.exists(events_path) and _events.read_noise_signals(events_path):
+        return os.path.basename(events_path)
+    legacy = _noise.sidecar_path_for(target)
+    if os.path.exists(legacy):
+        return os.path.basename(legacy)
+    return None
+
+
+def _apply_noise_ref(lf, noise_ref: Any, raw_h5: str) -> int:
+    """Mask ``lf`` from a decision's ``noise_event_ref``, dispatching by suffix.
+
+    ``.delsys-events`` -> unified file's noise type; ``.delsys-noise`` -> legacy
+    per-signal sidecar; anything else -> a trial-keyed datanavigator Event JSON.
+    Returns the number of signals touched (0 when the ref resolves to nothing).
+    """
+    from delsys import _events, _noise
+
+    npath, nkey = _resolve_noise_ref(noise_ref, raw_h5)
+    if not npath or not os.path.exists(npath):
+        return 0
+    if npath.endswith(_events.EVENTS_SUFFIX):
+        return _events.apply_events_noise(lf, npath)
+    if npath.endswith(_noise.SIDECAR_SUFFIX):
+        return _noise.apply_noise_sidecar(lf, npath)
+    return _noise.apply_noise_events(lf, npath, nkey)
+
+
 def upsert_decision(
     checkpoint: Union[str, Path],
     *,
@@ -240,7 +280,8 @@ def upsert_decision(
         splice_source: ``"combined"`` / ``"ekgonly"`` / ``"motiononly"``.
         motion: Motion pairing (``"auto"`` / ``{emg_sensor: target}`` dict / ``None``).
         noise_ref: Stored ``noise_event_ref``. ``None`` (default) points at the
-            sibling ``<stem>.delsys-noise`` when one exists, so :func:`clean`
+            sibling unified ``<stem>.delsys-events`` (its noise type) when one
+            exists, else a legacy ``<stem>.delsys-noise``, so :func:`clean`
             re-consumes the same human noise windows.
         accept: Stored ``accept`` flag. ``True`` (default) marks the trial reviewed;
             ``False`` blocks regeneration until flipped (see :func:`_clean_one`).
@@ -258,11 +299,7 @@ def upsert_decision(
     checkpoint = str(checkpoint)
 
     if noise_ref is None:
-        from delsys import _noise
-
-        sidecar = _noise.sidecar_path_for(checkpoint)
-        if os.path.exists(sidecar):
-            noise_ref = os.path.basename(sidecar)
+        noise_ref = _default_noise_ref(checkpoint)
 
     decision = {
         "ecg_components_to_remove": sorted({int(c) for c in components}),
@@ -342,26 +379,15 @@ def _clean_one(
             is_new = True
 
         # Noise hook: consume human-authored noise windows. An explicit decision
-        # noise_event_ref wins; otherwise default to a sibling
-        # <stem>.delsys-noise sidecar when present (recorded as provenance so a
-        # replay re-consumes the same sidecar). Consumption dispatches by
-        # suffix: a .delsys-noise path is the per-signal sidecar; anything else
-        # is a trial-keyed datanavigator Event JSON.
-        from delsys import _noise
-
+        # noise_event_ref wins; otherwise default to a sibling annotation sidecar
+        # (the unified <stem>.delsys-events noise type, else legacy
+        # <stem>.delsys-noise) when present, recorded as provenance so a replay
+        # re-consumes the same marks. Consumption dispatches by suffix
+        # (see _apply_noise_ref).
         if not noise_ref:
-            sidecar = _noise.sidecar_path_for(raw_h5)
-            if os.path.exists(sidecar):
-                noise_ref = os.path.basename(sidecar)
+            noise_ref = _default_noise_ref(raw_h5)
 
-        noise_touched = 0
-        if noise_ref:
-            npath, nkey = _resolve_noise_ref(noise_ref, raw_h5)
-            if npath and npath.endswith(_noise.SIDECAR_SUFFIX):
-                if os.path.exists(npath):
-                    noise_touched = _noise.apply_noise_sidecar(lf, npath)
-            elif npath and os.path.exists(npath):
-                noise_touched = _noise.apply_noise_events(lf, npath, nkey)
+        noise_touched = _apply_noise_ref(lf, noise_ref, raw_h5) if noise_ref else 0
 
         result = lf.clean_emg_ekg_artifact(
             config=cfg,

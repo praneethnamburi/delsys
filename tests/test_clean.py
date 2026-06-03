@@ -350,6 +350,57 @@ def test_clean_auto_consumes_sibling_delsys_noise(raw_checkpoint):
     assert "noise_masked=" in (folder / "delsys_cleaning_report.txt").read_text()
 
 
+def test_clean_auto_consumes_sibling_delsys_events(raw_checkpoint):
+    """A sibling unified ``<stem>.delsys-events`` (noise type) is consumed by
+    default and recorded as provenance."""
+    from delsys import _events
+    from delsys._noise import format_signal_key
+
+    raw, folder = raw_checkpoint
+    key = format_signal_key(delsys.Log(str(raw)).signals[0])
+    _events.write_events(
+        _events.events_path_for(str(raw)), {"noise": {"signals": {key: [[0.02, 0.05]]}}}
+    )
+
+    res = delsys.clean(str(folder), progress=False)
+    assert res[str(raw)] == "cleaned"
+    entry = read_decision(raw)
+    assert entry["noise_event_ref"] == "Trial_5.delsys-events"
+    assert "noise_masked=" in (folder / "delsys_cleaning_report.txt").read_text()
+
+
+def test_clean_prefers_events_over_legacy_noise(raw_checkpoint):
+    """With both sidecars present, the unified ``.delsys-events`` wins."""
+    from delsys import _events
+    from delsys._noise import format_signal_key
+
+    raw, folder = raw_checkpoint
+    key = format_signal_key(delsys.Log(str(raw)).signals[0])
+    _events.write_events(
+        _events.events_path_for(str(raw)), {"noise": {"signals": {key: [[0.02, 0.05]]}}}
+    )
+    write_noise_sidecar(sidecar_path_for(str(raw)), {key: [[0.30, 0.40]]})
+
+    delsys.clean(str(folder), progress=False)
+    assert read_decision(raw)["noise_event_ref"] == "Trial_5.delsys-events"
+
+
+def test_clean_ignores_events_without_noise_type(raw_checkpoint):
+    """A ``.delsys-events`` with only marker types (no noise) is not used as the
+    default noise ref; a sibling legacy ``.delsys-noise`` still is."""
+    from delsys import _events
+
+    raw, folder = raw_checkpoint
+    _events.write_events(
+        _events.events_path_for(str(raw)),
+        {"1": {"size": 1, "signals": {"3.EMGS | T": [[0.1]]}}},
+    )
+    write_noise_sidecar(sidecar_path_for(str(raw)), {"3.EMGS": [[0.1, 0.2]]})
+
+    delsys.clean(str(folder), progress=False)
+    assert read_decision(raw)["noise_event_ref"] == "Trial_5.delsys-noise"
+
+
 # ---------------------------------------------------------------------------
 # 0.5.0 — upsert_decision (interactive review-cleaning write-back)
 # ---------------------------------------------------------------------------

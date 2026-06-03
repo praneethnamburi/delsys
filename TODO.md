@@ -64,14 +64,28 @@ To regenerate this snapshot::
   once pysampled ships those classmethods (deferred from pysampled
   1.2.0). Status check: pysampled 1.2.0 explicitly pulled them
   before release; revisit when pysampled 1.3.0 plans firm up.
-- **In-log noise marking + per-log sidecar + SignalBrowser (target 0.5.0).**
-  Designed — see [`.claude-prompts/plan-0.5.0-noise-marking-signalbrowser.md`](.claude-prompts/plan-0.5.0-noise-marking-signalbrowser.md).
-  `lf.annotate_noise()` opens a delsys subclass of datanavigator's `SignalBrowser`
-  (with a new signal dropdown) to mark noise per signal and drive interactive
-  cleaning; windows persist to a per-log `<stem>.delsys-noise` sidecar keyed by
-  `"<sensor>.<modality>[.<coord>] | <label>"`; the per-log
-  `<stem>.delsys-artifact` decision's `noise_event_ref` points at it. Phased: (A) dnav sidebar
-  dropdown, (B) delsys sidecar data layer, (C) the subclass + `annotate_noise`.
+- **In-log annotation: `lf.view()` + unified `.delsys-events` (DONE, 0.5.0a2).**
+  Originally designed as noise-only marking
+  ([`.claude-prompts/plan-0.5.0-noise-marking-signalbrowser.md`](.claude-prompts/plan-0.5.0-noise-marking-signalbrowser.md));
+  shipped broader: `lf.view(kind=..., events=...)` marks both a `noise` track
+  *and* typed event-marker tracks into one `<stem>.delsys-events` sidecar
+  (`delsys._events`), keyed by `"<sensor>.<modality>[.<coord>] | <label>"`. Markers
+  are authored per signal (provenance) and collapsed to trial-level on read.
+  `annotate_noise` is a deprecated alias for `view`. Follow-ups:
+  - **Marker-track keybindings for non-digit names.** Custom `events=` track names
+    bind their *name* as the add key, so only single-key names (the default `"1"`
+    / `"2"`) actually fire on keypress; a multi-char name (`"onset"`) can be marked
+    only programmatically today. Add an explicit `add_key`/`remove_key` per track
+    (or an active-track selector) so arbitrary names get a working key.
+  - **Trial-level marker consumption surface.** `collapse_markers` exists; wire a
+    public `Log`-level reader (epoching / segmenting from the marker tracks) once a
+    downstream caller needs it.
+  - **Marker reconciliation across signals.** `collapse_markers(dedupe=...)` keeps
+    all marks by default; when the datanest trial-DB lands, decide a canonical
+    dedupe/agreement policy for the same logical event marked from two signals.
+- **Unsaved-changes warning on window close** (now `lf.view()` + `Log.clean()`).
+  Still deferred (see the dedicated item below); the unified `.delsys-events` save
+  makes the `is_dirty`/`save` registration cleaner to add when it lands.
 - **Batch cleaning (`delsys.clean`) follow-ups** (the batch/manifest/docs layer
   shipped in `_clean.py` + `_noise.py` — see CHANGELOG `[Unreleased]`):
   - **Noise-mask consumption — full implementation.** v1 wires the hook: a
@@ -101,7 +115,7 @@ To regenerate this snapshot::
   datanavigator already exposes the `find_qt_window` primitive it would build on.
 - **Faithful noise in the `Log.clean()` preview.** `CleaningSession.from_log` fits
   the ICA on the *raw* (un-noise-masked) EMG; `delsys.clean()` applies the
-  `.delsys-noise` sidecar before cleaning. So the live preview can differ slightly
+  `.delsys-events` noise track before cleaning. So the live preview can differ slightly
   from the final output on trials with aggressive noise windows. Fix: apply the
   sibling sidecar in `from_log` before the fit (pairs naturally with auto-noise
   detection, which writes the same sidecar).

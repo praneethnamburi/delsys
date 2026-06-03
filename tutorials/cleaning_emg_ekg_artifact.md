@@ -140,7 +140,8 @@ view isn't dwarfed by a spike elsewhere).
 splice, and the motion choice — to the sibling `<stem>.delsys-artifact`, and
 clears any stale `*_cleaned.h5`. So the loop is: review → Save → re-run the
 batch `delsys.clean()` (see `tutorials/workflow.md`), which reproduces exactly
-what you previewed (and re-consumes a sibling `.delsys-noise` sidecar). The
+what you previewed (and re-consumes a sibling `.delsys-events` noise track, or a
+legacy `.delsys-noise` sidecar). The
 reviewer needs an EKG reference and the ECG stage on — it raises if there are
 no components to pick.
 

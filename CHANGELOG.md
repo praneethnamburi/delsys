@@ -125,34 +125,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     field. JSON body `{"schema", "signals": {key: {"windows", "dead"}}}` via
     `read_noise_sidecar` / `write_noise_sidecar` (a bare list value is windows-only
     shorthand).
-  - `delsys.clean` defaults a trial's `noise_event_ref` to a sibling
-    `<stem>.delsys-noise` when present (consumed before the cleaner; the resolved
-    basename is frozen into the decision sidecar as provenance). Consumption dispatches by
-    suffix, so existing datanavigator-Event refs still work.
-- **`Log.annotate_noise(view=...)`** — interactive noise annotator
-  (`delsys.annotate`; `datanavigator` imported lazily so the delsys core stays
-  dnav-free). Two views onto the **same** `<stem>.delsys-noise` sidecar (shared
-  marking logic via `_NoiseMarkingMixin`). Common interaction: hover the cursor
-  and press **`1`** (two presses fix a window's start/end), **`alt+1`** to remove
-  the nearest; **Save noise** button (auto-seeded from an existing sidecar on
-  open). Marks are shaded on the trace; opens wide, auto-scaling, with labelled
-  axes (`time (s)` / `<modality> (<unit>)`). Annotations are indexed by
-  structural **address** (label-free), so a sidecar from a previous session
-  renders even if its keys carry a different/older `| <label>`; saving re-attaches
-  the current label.
-  - **`view="signal"`** (default) — `SignalBrowser` subclass: flip through every
-    channel via the dropdown; a **Mod scope** toggle records against the channel
-    (coord-ful) or whole sensor+modality (coord-less); **Toggle dead** / **Undo
-    window** buttons.
-  - **`view="sensor"`** — `PlotBrowser` subclass: one sensor's modalities as
+  - `delsys.clean` defaults a trial's `noise_event_ref` to a sibling annotation
+    sidecar when present — the unified `<stem>.delsys-events` (its `noise` type)
+    in preference to a legacy `<stem>.delsys-noise` — consumed before the cleaner;
+    the resolved basename is frozen into the decision sidecar as provenance.
+    Consumption dispatches by suffix (`_apply_noise_ref`), so existing
+    `<stem>.delsys-noise` and datanavigator-Event refs still work. The
+    `_apply_noise_signal_map` core is shared by the legacy and unified paths.
+- **Unified annotation sidecar** (`<stem>.delsys-events`, in `delsys._events`) —
+  one per-log file holding **every** human annotation, split by *event type*: the
+  built-in `noise` quality track (windows + dead, the `_noise` grammar above) plus
+  typed **marker** tracks (`"1"`, `"2"`, …) — point (`size=1`) or window
+  (`size=2`) events authored **per signal** (the address is provenance) and read
+  back as **trial-level** markers via `collapse_markers` (keep-all + provenance by
+  default; optional proximity dedupe). JSON `{"schema", "events": {type: …}}` via
+  `read_events` / `write_events`; `noise_signals_for` + `migrate_noise_sidecar`
+  bridge a legacy `<stem>.delsys-noise` (read when no unified file is present;
+  folded in on next save). `apply_events_noise(lf, path)` masks off the `noise`
+  type. datanavigator's per-`Event` save is bypassed in favour of this one
+  unified write — it stays only the in-memory marking engine.
+- **`Log.view(kind=..., events=...)`** — interactive annotator (`delsys.annotate`;
+  `datanavigator` imported lazily so the delsys core stays dnav-free). Marks two
+  kinds of annotation into one `<stem>.delsys-events` sidecar (shared logic via
+  `_MarkingMixin`), with a single **Save** button (auto-seeded from an existing
+  unified file, or a legacy `<stem>.delsys-noise`, on open):
+  - **noise** — hover and press **`n`** (two presses fix a window), **`alt+n`** to
+    remove the nearest, **`d`** to toggle the address dead. A per-signal quality
+    mask consumed by `delsys.clean`.
+  - **typed markers** — point / window events of arbitrary type added with the
+    **digit keys** (`1` → a `"1"`-event, `2` → a `"2"`-event, …), removed with
+    `alt+<digit>`; the tracks are configurable via `events=` (default: a point
+    `"1"` + a window `"2"`). Authored per signal, collapsed to trial-level on read.
+
+  Marks are shaded/lined on the trace; annotations index by structural **address**
+  (label-free), so a sidecar from a previous session renders even if its keys carry
+  a different/older `| <label>` (saving re-attaches the current label).
+  `Log.annotate_noise(view=...)` is kept as a **deprecated alias** for `view()`.
+  - **`kind="signal"`** (default) — `SignalBrowser` subclass: flip through every
+    channel via the dropdown; a **Mod scope** toggle records *noise* against the
+    channel (coord-ful) or whole sensor+modality (coord-less); markers always record
+    the coord-ful channel; **Toggle dead** / **Undo window** buttons.
+  - **`kind="sensor"`** — `PlotBrowser` subclass: one sensor's modalities as
     stacked, time-aligned subplots, picked via the dropdown. **EMGQ / FSR / Analog
     get one subplot per sub-channel** (so each Quattro channel, FSR pad, or Sync
     line is individually markable — and a Sync carrying a single line shows one
     panel), while EMGS/EKG (single trace) and ACC/GYRO (X/Y/Z overlaid) stay as one
     whole-modality subplot; a sensor mixing EMGQ with ACC/GYRO shows them all.
     Marking targets the hovered subplot's address; a **Sensor scope** toggle instead
-    fans the mark across every modality of the sensor (a wall-clock burst hits them
-    all). **`d`** toggles dead. Built for blips shared across a sensor's channels.
+    fans a *noise* mark across every modality of the sensor (a wall-clock burst hits
+    them all). Built for blips shared across a sensor's channels.
 - **`Log.clean()`** — interactive ECG/ICA cleaning tool (`delsys.clean_review`;
   `datanavigator` imported lazily). The single-log interactive counterpart to the
   batch `delsys.clean()`, and the unified successor to the old read-only
@@ -185,8 +206,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delsys._clean.read_decision` / `write_decision`.
 - `tutorials/workflow.md` — end-to-end walkthrough (`process` → `.h5` →
   `clean` → `*_cleaned.h5` → analysis), covering the decision-sidecar edit/re-run
-  loop; section 4 now leads with `lf.annotate_noise()` + the `.delsys-noise` sidecar
-  (the datanavigator-Event path kept as legacy).
+  loop; section 4 now leads with `lf.view()` + the unified `.delsys-events` sidecar
+  (legacy `.delsys-noise` + the datanavigator-Event path kept as fallbacks).
 
 ### Changed
 

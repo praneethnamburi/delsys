@@ -18,8 +18,10 @@ Two kinds of cleaning show up here, and they have **separate owners**:
 * **Algorithmic** ECG suppression + motion regression — `delsys`'s
   [`Log.clean_emg_ekg_artifact`](cleaning_emg_ekg_artifact.md), driven in batch
   by `delsys.clean`.
-* **Human** noise-window marking (a cable bump, a dropped-sample burst) —
-  authored in `datanavigator`'s `SignalBrowser` and merely *consumed* here.
+* **Human** annotation — noise windows (a cable bump, a dropped-sample burst) and
+  typed event markers — authored in `lf.view()` (a `datanavigator` `SignalBrowser`
+  subclass) and written to one `<stem>.delsys-events` sidecar; the noise track is
+  *consumed* here.
 
 ## 1. CSV → native checkpoint (`process`)
 
@@ -71,7 +73,7 @@ cleaned output — the ICA components removed, which cleaned variant was spliced
 the motion pairing, any noise reference, and the rest of the
 [`CleaningConfig`](api.md) knobs — lives in a sibling `<stem>.delsys-artifact`
 sidecar that travels with the checkpoint (the same per-log model as
-`<stem>.delsys-noise`):
+`<stem>.delsys-events`):
 
 ```javascript
 {
@@ -83,7 +85,7 @@ sidecar that travels with the checkpoint (the same per-log model as
     "splice_source": "combined",
     // ACC pairing: "auto" | null (skip motion stage) | {emg_sensor: acc_sensor_or_location}.
     "motion": "auto",
-    // Noise windows: null | "<stem>.delsys-noise" | {"path": "<event>.json", "key": "(2, 14, 17)"}.
+    // Noise windows: null | "<stem>.delsys-events" | "<stem>.delsys-noise" | {"path": "<event>.json", "key": "(2, 14, 17)"}.
     "noise_event_ref": null,
     // Review status: null (unreviewed) | true (approved) | false (blocks regen).
     "accept": null,
@@ -157,77 +159,103 @@ is no good and you don't want it regenerated or trusted, set `accept` to `false`
 `clean()` then skips it (`skipped: rejected`) even under `overwrite=True`, until
 you fix the decision and flip the flag back.
 
-## 4. Marking per-signal noise: `lf.annotate_noise()` → `.delsys-noise`
+## 4. Annotating a trial: `lf.view()` → `.delsys-events`
 
-Algorithmic cleaning handles ECG and motion artifact. Gross human-visible
-noise — a cable yank, a sensor reseat, a dropped-sample burst, a dead electrode —
-is better marked by eye, **per signal**. `Log.annotate_noise()` opens an
-interactive browser (a `datanavigator` `SignalBrowser` subclass) over the Log's
-signals; `datanavigator` is imported lazily there, so the delsys core stays
-`datanavigator`-free until you call it:
+Algorithmic cleaning handles ECG and motion artifact. Everything a human marks by
+eye — gross **noise** (a cable yank, a reseat, a dropped-sample burst, a dead
+electrode) *and* **events** (note onsets, phrase boundaries, task phases) — goes
+through `Log.view()`, which opens an interactive browser (a `datanavigator`
+`SignalBrowser` subclass) over the Log's signals and writes one unified
+`<stem>.delsys-events` sidecar. `datanavigator` is imported lazily there, so the
+delsys core stays `datanavigator`-free until you call it:
 
 ```python
 lf = delsys.Log("Trial_5.h5")
-lf.annotate_noise()   # opens the annotator
+lf.view()                       # noise track + a "1" point + a "2" window track
+lf.view(events={"onset": 1, "phrase": 2})   # custom marker tracks
 ```
 
 * The sidebar **dropdown** lists every signal by its structural key
   `"<sensor>.<modality>.<coord> | <location>"`; pick one (or arrow through them).
-* **Hover** the cursor at the spot and press **`1`** to mark a window — two
-  presses fix its start and end; **`alt+1`** removes the window nearest the
-  cursor.
-* The **Mod scope** toggle records the window against the whole sensor+modality
-  (coord-less key) instead of the single channel — for a bump that hits every
-  axis; leave it off to mark one axis. ("We need both.")
-* **Toggle dead** marks the current scope dead for the whole recording (a dead
-  electrode / FSR channel); **Undo window** drops the last window; **Save noise**
-  writes the sidecar.
+* **Noise:** hover and press **`n`** to mark a window — two presses fix its start
+  and end; **`alt+n`** removes the nearest; **`d`** (Toggle dead) marks the current
+  scope dead for the whole recording.
+* **Markers:** press a **digit** to drop a typed event at the cursor — **`1`** adds
+  a `"1"`-event (a point), **`2`** a `"2"`-event (a window, two presses); **`alt+1`**
+  / **`alt+2`** remove the nearest. Each mark records the **signal it was placed
+  from** (provenance), and is read back as a trial-level marker.
+* The **Mod scope** toggle records a *noise* window against the whole
+  sensor+modality (coord-less key) instead of the single channel — for a bump that
+  hits every axis; markers always record the coord-ful channel. **Undo window**
+  drops the last noise window; **Save** writes the sidecar.
 
 For noise shared across a sensor's channels (a mechanical/cable artifact that
 hits EMG *and* ACC/GYRO together), the **sensor-centric** view stacks one
 sensor's modalities as time-aligned subplots:
 
 ```python
-lf.annotate_noise(view="sensor")   # dropdown picks the sensor; 1 / alt+1 / d
+lf.view("sensor")   # dropdown picks the sensor; n / alt+n / d / digits
 ```
 
-Here `1`/`alt+1` mark the **hovered subplot's** whole sensor+modality and `d`
-toggles it dead. Both views write the same `<stem>.delsys-noise`.
+Here marking targets the **hovered subplot's** address; a **Sensor scope** toggle
+fans a noise mark across every modality of the sensor. Both views write the same
+`<stem>.delsys-events`.
 
-Marks land in a sibling `<stem>.delsys-noise` file (JSON; composite suffix so
-portfolio `*.json` tooling skips it), keyed by signal address:
+Marks land in a sibling `<stem>.delsys-events` file (JSON; composite suffix so
+portfolio `*.json` tooling skips it), split by event type, each keyed by signal
+address:
 
 ```javascript
-// Trial_5.delsys-noise
+// Trial_5.delsys-events
 {
   "schema": 1,
-  "signals": {
-    "3.EMGS.A | Tricep_L":  { "windows": [[1.0, 2.0]] },
-    "4.ACC | Bicep_R":      { "windows": [[5.2, 5.4]] },   // whole-modality
-    "9.FSR.C | LFoot_Ball": { "dead": [[12.4, null]] }      // dies at 12.4 s
+  "events": {
+    "noise": { "kind": "noise", "signals": {
+      "3.EMGS.A | Tricep_L":  { "windows": [[1.0, 2.0]] },
+      "4.ACC | Bicep_R":      { "windows": [[5.2, 5.4]] },   // whole-modality
+      "9.FSR.C | LFoot_Ball": { "dead": [[12.4, null]] }      // dies at 12.4 s
+    }},
+    "1": { "kind": "marker", "size": 1, "signals": {
+      "3.EMGS.A | Tricep_L": [[1.40], [2.10]]                 // two point events
+    }}
   }
 }
 ```
 
-`windows` are blanked to `NaN` and interpolated back; `dead` spans are
+Noise `windows` are blanked to `NaN` and interpolated back; `dead` spans are
 zero-filled (a `null` endpoint is open — `[T, null]` = dead from `T` on,
 `[null, null]` = the whole recording). `delsys.clean` **auto-consumes** a sibling
-`.delsys-noise` (no manifest edit needed) and records it in the trial's
-`noise_event_ref` as provenance:
+`.delsys-events` (its `noise` type; no manifest edit needed) and records it in the
+trial's `noise_event_ref` as provenance:
 
 ```python
 delsys.clean(folder, overwrite=True)
 # delsys_cleaning_report.txt:  Trial_5.h5 - cleaned (ecg=[3], splice=combined, noise_masked=4)
 ```
 
-To drive masking directly (outside the batch):
+Marker tracks are read back collapsed across signals into trial-level markers
+(every mark kept, with its originating address; pass `dedupe=<seconds>` to merge
+near-coincident marks):
 
 ```python
-from delsys import _noise
+from delsys import _events
+
+recs = _events.collapse_markers("Trial_5.delsys-events", "1")
+# [{"seq": [1.40], "address": "3.EMGS.A", "label": "Tricep_L"}, ...]
+```
+
+To drive noise masking directly (outside the batch):
+
+```python
+from delsys import _events
 
 lf = delsys.Log("Trial_5.h5")
-_noise.apply_noise_sidecar(lf, "Trial_5.delsys-noise")   # per-signal addresses
+_events.apply_events_noise(lf, "Trial_5.delsys-events")   # per-signal addresses
 ```
+
+A legacy `<stem>.delsys-noise` (the pre-unification per-signal sidecar) is still
+read when no `.delsys-events` is present, and folded into the unified file on the
+next `lf.view()` save.
 
 ### Legacy: datanavigator noise Events (trial-keyed, flat intervals)
 

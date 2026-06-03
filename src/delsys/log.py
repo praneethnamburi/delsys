@@ -577,31 +577,49 @@ class Log:
     # EMG / EKG artifact cleaning
     # ------------------------------------------------------------------
 
-    def annotate_noise(self, path: Optional[str] = None, view: str = "signal"):
-        """Open an interactive noise annotator over this Log (see :mod:`delsys.annotate`).
+    def view(self, kind: str = "signal", *, events=None, path: Optional[str] = None):
+        """Open an interactive annotator over this Log (see :mod:`delsys.annotate`).
 
-        Mark noise windows / dead channels by hovering the cursor and pressing
-        ``1`` (two presses fix a window) / ``alt+1`` (remove nearest); they save
-        to a ``<stem>.delsys-noise`` sidecar that :func:`delsys.clean`
-        auto-consumes. datanavigator is imported lazily here, so the delsys core
-        stays datanavigator-free until this method is called.
+        Two tracks of annotation, both saved to one sibling ``<stem>.delsys-events``
+        sidecar that :func:`delsys.clean` auto-consumes (its ``noise`` type):
+
+        - **noise** — hover the cursor and press ``n`` (two presses fix a window) /
+          ``alt+n`` (remove nearest) / ``d`` (toggle the address dead). A per-signal
+          quality mask, NaN+interpolated by the cleaner.
+        - **typed markers** — point or window events of arbitrary type, added with
+          the digit keys (``1`` adds a ``"1"``-event, ``2`` a ``"2"``-event, …) and
+          removed with ``alt+<digit>``. Authored per signal (provenance) and read
+          back as trial-level markers via :func:`delsys._events.collapse_markers`.
+
+        datanavigator is imported lazily here, so the delsys core stays
+        datanavigator-free until this method is called.
 
         Args:
-            path: Sidecar path to read/write. Defaults to a sibling
-                ``<stem>.delsys-noise`` of this Log's source file.
-            view: ``"signal"`` (default) — per-channel ``SignalBrowser``: flip
+            kind: ``"signal"`` (default) — per-channel ``SignalBrowser``: flip
                 through channels via the dropdown, mark per channel or whole
                 sensor+modality (``Mod scope`` toggle). ``"sensor"`` — per-sensor
                 ``PlotBrowser``: one sensor's modalities (EMG/ACC/GYRO/…) as
-                stacked subplots, mark whole-modality windows (good for blips
-                shared across a sensor's channels).
+                stacked subplots (good for blips shared across a sensor's channels).
+            events: Marker tracks to offer. ``None`` (default) is a point track
+                ``"1"`` + a window track ``"2"``; pass a ``{name: size}`` mapping
+                or a sequence of names / ``(name, size)`` pairs to customize.
+            path: Sidecar path to read/write. Defaults to a sibling
+                ``<stem>.delsys-events`` of this Log's source file.
 
         Returns:
             The annotator instance (a ``datanavigator`` browser subclass).
         """
-        from delsys.annotate import launch_noise_annotator
+        from delsys.annotate import launch_annotator
 
-        return launch_noise_annotator(self, path, view=view)
+        return launch_annotator(self, path, view=kind, events=events)
+
+    def annotate_noise(self, path: Optional[str] = None, view: str = "signal"):
+        """Deprecated alias for :meth:`view` (kept for back-compat).
+
+        The annotator now marks typed event markers in addition to noise, and
+        writes the unified ``<stem>.delsys-events`` sidecar. Prefer ``lf.view()``.
+        """
+        return self.view(view, path=path)
 
     def clean(self, *, config: Optional[CleaningConfig] = None):
         """Open the interactive ECG/ICA cleaner over this Log.

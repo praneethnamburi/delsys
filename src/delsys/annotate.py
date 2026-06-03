@@ -1,44 +1,60 @@
-"""Interactive noise annotation over a :class:`delsys.Log`.
+"""Interactive annotation over a :class:`delsys.Log`: noise + typed event markers.
 
-Two views onto the **same** ``<stem>.delsys-noise`` sidecar (see
-:mod:`delsys._noise` for the key grammar + on-disk format):
+Two views onto the **same** ``<stem>.delsys-events`` sidecar (see
+:mod:`delsys._events` for the unified on-disk format; :mod:`delsys._noise` for the
+signal-address key grammar shared by every track):
 
-- **signal-centric** (:func:`launch_noise_annotator` ``view="signal"``, the
-  default) — a ``datanavigator`` ``SignalBrowser`` subclass: flip through every
-  channel, mark windows per channel or per whole sensor+modality.
+- **signal-centric** (:func:`launch_annotator` ``view="signal"``, the default) — a
+  ``datanavigator`` ``SignalBrowser`` subclass: flip through every channel, mark
+  per channel or per whole sensor+modality.
 - **sensor-centric** (``view="sensor"``) — a ``datanavigator`` ``PlotBrowser``
   subclass: see one sensor's modalities (EMG / ACC / GYRO / …) as stacked,
-  time-aligned subplots, and mark whole-modality windows. Built for spotting a
-  blip shared across a sensor's channels (mechanical/cable artifact).
+  time-aligned subplots. Built for spotting a blip shared across a sensor's
+  channels (mechanical/cable artifact).
 
-Both share :class:`_NoiseMarkingMixin` (state + `.delsys-noise` I/O + the
-keypress add/remove/dead actions); each browser supplies only what's
-view-specific (which address a cursor targets, and how to draw overlays).
+Both share :class:`_MarkingMixin` (state + unified ``.delsys-events`` I/O + the
+keypress add/remove actions for both the **noise** track and the **typed marker**
+tracks); each browser supplies only what's view-specific (which address a cursor
+targets, and how to draw overlays).
 
-``datanavigator`` is an *optional* dependency: it is imported only when a view
-is launched (inside the per-class factories), so the delsys core stays
+``datanavigator`` is an *optional* dependency: it is imported only when a view is
+launched (inside the per-class factories), so the delsys core stays
 ``datanavigator``-free.
 
-Marking (hover the cursor at the spot, then press):
+Two kinds of mark (hover the cursor at the spot, then press):
 
-- **``1``** — add a window: two presses fix its start and end;
-- **``alt+1``** — remove the window nearest the cursor;
-- **``d``** (sensor view) — toggle the hovered modality dead for the whole recording;
-- **Save noise** button writes the sidecar (auto-seeded from an existing one).
+- **noise** — a per-signal quality mask consumed by :func:`delsys.clean`:
+  ``n`` adds a window (two presses fix start + end), ``alt+n`` removes the nearest,
+  ``d`` toggles the hovered address dead for the whole recording.
+- **typed markers** — point (``size=1``, one press) or window (``size=2``, two
+  presses) events of an arbitrary type (``"1"``, ``"2"``, …), authored *per
+  signal* (the address is provenance) and consumed at analysis time as trial-level
+  markers (:func:`delsys._events.collapse_markers`). The digit key adds the type;
+  ``alt+<digit>`` removes the nearest.
+
+A single **Save** button writes every track to the one ``<stem>.delsys-events``.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from matplotlib import pyplot as plt
 
-from delsys import _noise
+from delsys import _events, _noise
 from delsys._util import _mod_to_attr, _trim_location
 
 #: Sentinel span for a whole-recording dead channel (open both ends).
 _WHOLE_EXTENT = [None, None]
+
+#: Default marker tracks when a view is opened without an explicit ``events=``
+#: spec: a point track ``"1"`` and a window track ``"2"`` (the "1-event /
+#: 2-event" shape). Each entry is ``(name, size)``.
+_DEFAULT_MARKER_SPECS = (("1", 1), ("2", 2))
+
+#: Colors cycled across marker tracks (noise has its own red/orange/gray scheme).
+_MARKER_COLORS = ("tab:green", "tab:blue", "tab:purple", "tab:brown", "tab:olive")
 
 #: Conventional Trigno display units per modality, for the y-axis label. These
 #: are *conventions* (not read from the file — the loader doesn't carry units);
@@ -63,77 +79,163 @@ _MARKABLE_ORDER = ("EMGS", "EMGD", "EMGQ", "EKG", "ACC", "GYRO", "FSR", "Analog"
 #: actual signals present, so e.g. a single-trace Sync (Analog) shows one panel.
 _SPLIT_MODALITIES = ("EMGQ", "FSR", "Analog")
 
+#: Spec form accepted by :func:`_normalize_marker_specs` for the ``events=`` arg.
+MarkerSpecArg = Union[None, Dict[str, int], Sequence[Union[str, Tuple[str, int]]]]
 
-class _NoiseMarkingMixin:
-    """Shared noise-marking state + actions over a ``.delsys-noise`` sidecar.
+
+def _normalize_marker_specs(events: MarkerSpecArg) -> List[Tuple[str, int, str]]:
+    """Normalize the ``events=`` argument into ``[(name, size, color), ...]``.
+
+    Accepts ``None`` (the :data:`_DEFAULT_MARKER_SPECS` point+window pair), a
+    ``{name: size}`` mapping, or a sequence of names (size 1) / ``(name, size)``
+    pairs. Colors are cycled from :data:`_MARKER_COLORS`.
+    """
+    if events is None:
+        items: List = list(_DEFAULT_MARKER_SPECS)
+    elif isinstance(events, dict):
+        items = list(events.items())
+    else:
+        items = list(events)
+    specs: List[Tuple[str, int, str]] = []
+    for i, it in enumerate(items):
+        if isinstance(it, (list, tuple)):
+            name, size = it[0], (it[1] if len(it) > 1 else 1)
+        else:
+            name, size = it, 1
+        specs.append((str(name), int(size), _MARKER_COLORS[i % len(_MARKER_COLORS)]))
+    return specs
+
+
+class _MarkingMixin:
+    """Shared marking state + actions over a ``.delsys-events`` sidecar.
 
     Mixed into a ``datanavigator`` browser (which supplies ``add_key_binding`` /
-    ``buttons`` / ``memoryslots`` / ``update`` / ``statevariables``). The browser
-    subclass implements :meth:`_key_for_event` (which signal address a cursor
-    event targets) and its own overlay drawing; everything else lives here so the
-    signal- and sensor-centric views don't re-implement the marking logic.
+    ``buttons`` / ``memoryslots`` / ``update`` / ``statevariables``). Holds two
+    kinds of in-memory annotation, both keyed by structural signal **address**
+    (label stripped, so a relabel never breaks lookup):
+
+    - ``_ann`` — the **noise** track: ``{address: {"windows": [...], "dead": [...]}}``.
+    - ``_markers`` — the **typed marker** tracks:
+      ``{type_name: {address: [[t, ...], ...]}}``.
+
+    The browser subclass implements :meth:`_key_for_event` (which noise address a
+    cursor targets) and its own overlay drawing; everything common lives here so
+    the signal- and sensor-centric views don't re-implement the marking logic.
     """
 
     # -- state + I/O ------------------------------------------------------
 
-    def _init_noise_state(self, lf, path: Optional[str]) -> None:
+    def _init_marking_state(
+        self, lf, path: Optional[str], marker_specs: List[Tuple[str, int, str]]
+    ) -> None:
         """Set up sidecar path + in-memory annotation. Call from ``__init__``."""
         self._lf = lf
-        self._sidecar_path = path or _noise.sidecar_path_for(lf.fname)
-        self._ann: Dict[str, dict] = self._load_existing()
-        self._mark_buffer: list = []  # (key, x) pairs for the two-press add
+        self._events_path = path or _events.events_path_for(lf.fname)
+        self._marker_specs = marker_specs
+        self._ann: Dict[str, dict] = self._load_noise()
+        self._markers: Dict[str, Dict[str, list]] = self._load_markers()
+        self._mark_buffer: list = []  # (track, key, x) for multi-press sequences
         self._overlay_artists: list = []
+        # event.key -> spec, for the digit-key dispatch (bound methods only, so
+        # datanavigator's add_key_binding passes the matplotlib event through).
+        self._marker_add_by_key: Dict[str, Tuple[str, int]] = {
+            name: (name, size) for name, size, _ in marker_specs
+        }
+        self._marker_remove_by_key: Dict[str, str] = {
+            f"alt+{name}": name for name, _, _ in marker_specs
+        }
 
-    def _load_existing(self) -> Dict[str, dict]:
-        """Seed the in-memory state from an existing sidecar, if present.
+    def _load_noise(self) -> Dict[str, dict]:
+        """Seed the noise track from the unified file (or a legacy ``.delsys-noise``).
 
-        Keyed by structural **address** (label stripped) so a sidecar written
-        with any label — including an older code version's placeholder — still
-        matches the signals on render. Entries that collapse to the same address
-        are merged.
+        Keyed by structural **address** (label stripped) so a sidecar written with
+        any label — including an older code version's placeholder — still matches
+        the signals on render. Entries that collapse to the same address are merged.
         """
+        signals = _events.noise_signals_for(
+            self._events_path, _noise.sidecar_path_for(self._lf.fname)
+        )
         ann: Dict[str, dict] = {}
-        if os.path.exists(self._sidecar_path):
-            doc = _noise.read_noise_sidecar(self._sidecar_path)
-            for key, val in (doc.get("signals") or {}).items():
-                windows, dead = _noise._normalize_signal_value(val)
-                slot = ann.setdefault(_noise.key_address(key), {"windows": [], "dead": []})
-                slot["windows"].extend([a, b] for a, b in windows)
-                slot["dead"].extend([a, b] for a, b in dead)
+        for key, val in signals.items():
+            windows, dead = _noise._normalize_signal_value(val)
+            slot = ann.setdefault(_noise.key_address(key), {"windows": [], "dead": []})
+            slot["windows"].extend([a, b] for a, b in windows)
+            slot["dead"].extend([a, b] for a, b in dead)
         return ann
 
-    def _slot(self, key: str) -> dict:
-        return self._ann.setdefault(key, {"windows": [], "dead": []})
+    def _load_markers(self) -> Dict[str, Dict[str, list]]:
+        """Seed each marker track from the unified file, keyed by address."""
+        out: Dict[str, Dict[str, list]] = {name: {} for name, _, _ in self._marker_specs}
+        if not os.path.exists(self._events_path):
+            return out
+        for name, _size, _color in self._marker_specs:
+            sigs = _events.read_marker_signals(self._events_path, name)
+            slot = out[name]
+            for key, seqs in sigs.items():
+                slot.setdefault(_noise.key_address(key), []).extend(
+                    [list(s) for s in seqs]
+                )
+        return out
 
     def save(self, event=None) -> str:
-        """Write the sidecar (dropping empty entries). Returns the path.
+        """Write the unified ``.delsys-events`` (dropping empty entries). Returns the path.
 
-        ``_ann`` is keyed by address; each is re-labelled from the current Log on
-        the way out, so the file stays human-readable (and a stale-labelled
-        sidecar is self-healed).
+        Every in-memory address is re-labelled from the current Log on the way out,
+        so the file stays human-readable (and a stale-labelled sidecar is self-healed).
         """
-        payload = {
+        doc: Dict[str, dict] = {}
+        noise_signals = {
             _noise.relabel_key(self._lf, addr): v
             for addr, v in self._ann.items()
             if v.get("windows") or v.get("dead")
         }
-        path = _noise.write_noise_sidecar(self._sidecar_path, payload)
-        print(f"delsys.annotate_noise: saved {len(payload)} marked address(es) -> {path}")
+        if noise_signals:
+            doc[_events.NOISE_TYPE] = {"signals": noise_signals}
+        for name, size, _color in self._marker_specs:
+            sigs = {
+                _noise.relabel_key(self._lf, addr): seqs
+                for addr, seqs in self._markers.get(name, {}).items()
+                if seqs
+            }
+            if sigs:
+                doc[name] = {"size": size, "signals": sigs}
+        path = _events.write_events(self._events_path, doc)
+        n = sum(len(s.get("signals", {})) for s in doc.values())
+        print(f"delsys.view: saved {n} marked address(es) across {len(doc)} type(s) -> {path}")
         return path
 
-    # -- scope expansion (view hook) --------------------------------------
+    # -- multi-press collection (shared by noise windows + size>=2 markers) --
+
+    def _collect(self, track: str, size: int, key: str, x: float) -> Optional[list]:
+        """Buffer ``size`` cursor presses for one ``(track, key)``; return the
+        completed sequence (and clear the buffer) once full, else ``None``.
+
+        A press on a different ``(track, key)`` resets the buffer, so an
+        interrupted multi-press never splices across signals/tracks.
+        """
+        if self._mark_buffer and self._mark_buffer[0][:2] != (track, key):
+            self._mark_buffer = []
+        self._mark_buffer.append((track, key, float(x)))
+        if len(self._mark_buffer) < size:
+            return None
+        seq = [b[2] for b in self._mark_buffer[:size]]
+        self._mark_buffer = []
+        return seq
+
+    # -- scope expansion (noise view hook) --------------------------------
 
     def _scope_keys(self, key: str) -> List[str]:
-        """Addresses a marking action targets, given the cursor's ``key``.
+        """Noise addresses a marking action targets, given the cursor's ``key``.
 
         Defaults to the single ``key`` (the signal view, whose ``Mod scope``
         toggle already resolves which single key). The sensor view overrides this
-        to fan a mark out across every modality of the sensor when its
-        ``Sensor scope`` toggle is on.
+        to fan a mark across every modality of the sensor when its ``Sensor
+        scope`` toggle is on. Markers do *not* use scope — a marker records the one
+        signal it was placed from.
         """
         return [key]
 
-    # -- key-addressed actions (the cores; each redraws) ------------------
+    # -- noise track: key-addressed actions (each redraws) ----------------
 
     def _mark_window(self, key: str, a: float, b: float) -> None:
         a, b = float(min(a, b)), float(max(a, b))
@@ -141,6 +243,9 @@ class _NoiseMarkingMixin:
             for k in self._scope_keys(key):
                 self._slot(k)["windows"].append([a, b])
         self.update()
+
+    def _slot(self, key: str) -> dict:
+        return self._ann.setdefault(key, {"windows": [], "dead": []})
 
     def _remove_nearest(self, key: str, x: float) -> None:
         for k in self._scope_keys(key):
@@ -167,22 +272,17 @@ class _NoiseMarkingMixin:
                 slot["windows"].pop()
         self.update()
 
-    # -- cursor-driven keypress handlers (use _key_for_event) -------------
+    # -- noise track: cursor-driven keypress handlers ---------------------
 
     def _mark_point(self, event=None) -> None:
-        """Collect a cursor x; on the second press (same address) add the window."""
+        """Collect a cursor x; on the second press (same address) add the noise window."""
         key = self._key_for_event(event)
         x = getattr(event, "xdata", None)
         if key is None or x is None:  # cursor not over a markable trace
             return
-        if self._mark_buffer and self._mark_buffer[0][0] != key:
-            self._mark_buffer = []  # second press landed on a different signal
-        self._mark_buffer.append((key, float(x)))
-        if len(self._mark_buffer) < 2:
-            return
-        (k, x0), (_, x1) = self._mark_buffer[:2]
-        self._mark_buffer = []
-        self._mark_window(k, x0, x1)
+        seq = self._collect("noise", 2, key, x)
+        if seq is not None:
+            self._mark_window(key, seq[0], seq[1])
 
     def _remove_window(self, event=None) -> None:
         key = self._key_for_event(event)
@@ -195,23 +295,77 @@ class _NoiseMarkingMixin:
         if key is not None:
             self._toggle_dead(key)
 
-    def _add_noise_keybindings(self, dead_key: Optional[str] = None) -> None:
-        """Wire the marking keys + Save button. Frees digit keys from memoryslots."""
+    # -- typed marker tracks ----------------------------------------------
+
+    def _marker_key_for_event(self, event) -> Optional[str]:
+        """Provenance address a marker is placed on. Defaults to the noise key;
+        the signal view overrides to the coord-ful channel (a marker records the
+        one signal it was placed from, regardless of the noise Mod-scope toggle)."""
+        return self._key_for_event(event)
+
+    def _marker_slot(self, name: str, key: str) -> list:
+        return self._markers.setdefault(name, {}).setdefault(key, [])
+
+    def _mark_marker(self, name: str, size: int, event=None) -> None:
+        key = self._marker_key_for_event(event)
+        x = getattr(event, "xdata", None)
+        if key is None or x is None:
+            return
+        key = _noise.key_address(key)
+        seq = self._collect(name, size, key, x)
+        if seq is not None:
+            self._marker_slot(name, key).append(seq)
+            self.update()
+
+    def _remove_marker(self, name: str, event=None) -> None:
+        key = self._marker_key_for_event(event)
+        x = getattr(event, "xdata", None)
+        if key is None or x is None:
+            return
+        seqs = self._markers.get(name, {}).get(_noise.key_address(key))
+        if seqs:
+            i = min(range(len(seqs)), key=lambda i: abs(seqs[i][0] - x))
+            seqs.pop(i)
+            self.update()
+
+    def _mark_marker_event(self, event=None) -> None:
+        spec = self._marker_add_by_key.get(getattr(event, "key", None))
+        if spec is not None:
+            self._mark_marker(spec[0], spec[1], event)
+
+    def _remove_marker_event(self, event=None) -> None:
+        name = self._marker_remove_by_key.get(getattr(event, "key", None))
+        if name is not None:
+            self._remove_marker(name, event)
+
+    # -- keybindings ------------------------------------------------------
+
+    def _add_marking_keybindings(self, dead_key: Optional[str] = None) -> None:
+        """Wire the noise + marker keys and the Save button. Frees digit keys
+        from memoryslots so they can add marker types."""
         # GenericBrowser treats 1-9 as memory slots (storing _current_idx) and
         # re-shows the widget on every redraw; disable + neutralize the re-show so
-        # the slots are gone and '1' is free for marking.
+        # the slots are gone and the digits are free for marker types.
         self.memoryslots.disable()
         self.memoryslots.hide()
         self.memoryslots.show = lambda *a, **k: None
-        self.add_key_binding("1", self._mark_point, description="Add noise window (2 presses)")
-        self.add_key_binding(
-            "alt+1", self._remove_window, description="Remove nearest noise window"
-        )
+        # Noise track (letter keys, so digits stay free for marker types).
+        self.add_key_binding("n", self._mark_point, description="Add noise window (2 presses)")
+        self.add_key_binding("alt+n", self._remove_window, description="Remove nearest noise window")
         if dead_key is not None:
             self.add_key_binding(
                 dead_key, self._toggle_dead_at, description="Toggle dead (whole recording)"
             )
-        self.buttons.add(text="Save noise", type_="Push", action_func=lambda e: self.save())
+        # Typed marker tracks (digit add / alt+digit remove; bound-method dispatch).
+        for name, size, _color in self._marker_specs:
+            kind = "point" if size == 1 else "window"
+            self.add_key_binding(
+                name, self._mark_marker_event, description=f"Add {name}-event ({kind})"
+            )
+            self.add_key_binding(
+                f"alt+{name}", self._remove_marker_event, description=f"Remove nearest {name}-event"
+            )
+        self.buttons.add(text="Save", type_="Push", action_func=lambda e: self.save())
 
     # -- overlay helpers --------------------------------------------------
 
@@ -224,7 +378,7 @@ class _NoiseMarkingMixin:
         self._overlay_artists = []
 
     def _draw_key_spans(self, ax, key: str, color: str) -> None:
-        """Shade one key's windows (``color``) + dead spans (hatched gray) on ``ax``."""
+        """Shade one address's noise windows (``color``) + dead spans (hatched gray)."""
         slot = self._ann.get(key)
         if not slot:
             return
@@ -238,6 +392,20 @@ class _NoiseMarkingMixin:
                 ax.axvspan(lo, hi, alpha=0.15, color="gray", hatch="xx")
             )
 
+    def _draw_marker_spans(self, ax, key: str) -> None:
+        """Draw every marker track on ``ax`` for one address: size-1 as a dashed
+        vertical line, size>=2 as a translucent span, in the track's color."""
+        for name, size, color in self._marker_specs:
+            for seq in self._markers.get(name, {}).get(key, []):
+                if size >= 2 and len(seq) >= 2:
+                    self._overlay_artists.append(
+                        ax.axvspan(seq[0], seq[1], alpha=0.15, color=color)
+                    )
+                elif seq:
+                    self._overlay_artists.append(
+                        ax.axvline(seq[0], color=color, lw=1.2, ls="--")
+                    )
+
     # -- to be implemented by the view ------------------------------------
 
     def _key_for_event(self, event) -> Optional[str]:
@@ -248,11 +416,17 @@ def _build_signal_annotator_class():
     """Build the signal-centric annotator (datanavigator imported here, lazily)."""
     from datanavigator.signals import SignalBrowser
 
-    class NoiseAnnotator(_NoiseMarkingMixin, SignalBrowser):
-        """SignalBrowser that marks per-signal noise into a ``.delsys-noise`` sidecar."""
+    class SignalAnnotator(_MarkingMixin, SignalBrowser):
+        """SignalBrowser that marks noise + typed events into a ``.delsys-events`` sidecar."""
 
-        def __init__(self, lf, path: Optional[str] = None, figure_handle=None) -> None:
-            self._init_noise_state(lf, path)
+        def __init__(
+            self,
+            lf,
+            path: Optional[str] = None,
+            figure_handle=None,
+            marker_specs: Optional[List[Tuple[str, int, str]]] = None,
+        ) -> None:
+            self._init_marking_state(lf, path, marker_specs or _normalize_marker_specs(None))
             self._signals = list(lf.signals)
             # Dropdown labels = the coord-ful signal address for each channel.
             self._keys: List[str] = [_noise.format_signal_key(s) for s in self._signals]
@@ -273,7 +447,7 @@ def _build_signal_annotator_class():
 
         @property
         def _mod_scope(self) -> bool:
-            """Whether marking targets the whole sensor+modality (coord-less)."""
+            """Whether noise marking targets the whole sensor+modality (coord-less)."""
             return "Mod scope" in self.buttons and self.buttons["Mod scope"].state
 
         def _channel_key(self) -> str:
@@ -289,8 +463,12 @@ def _build_signal_annotator_class():
             return self._modality_key() if self._mod_scope else self._channel_key()
 
         def _key_for_event(self, event) -> Optional[str]:
-            # Single axes -> the current scope (the cursor's subplot is implicit).
+            # Single axes -> the current noise scope (the cursor's subplot is implicit).
             return self._current_key()
+
+        def _marker_key_for_event(self, event) -> Optional[str]:
+            # Markers always record the coord-ful channel (provenance), ignoring Mod scope.
+            return self._channel_key()
 
         # -- public/button wrappers (event-less; act on the current scope) --
 
@@ -306,7 +484,7 @@ def _build_signal_annotator_class():
         # -- controls + view ----------------------------------------------
 
         def _add_controls(self) -> None:
-            self._add_noise_keybindings()
+            self._add_marking_keybindings()
             self.buttons.add(text="Toggle dead", type_="Push", action_func=self.toggle_dead)
             self.buttons.add(text="Undo window", type_="Push", action_func=self.undo)
             # Scope toggle: False -> channel (coord-ful), True -> sensor+modality.
@@ -319,9 +497,10 @@ def _build_signal_annotator_class():
             ax = getattr(self, "_ax", None)
             if ax is not None:
                 # channel windows in red, whole-modality in orange (both affect
-                # the displayed channel); dead spans hatched gray.
+                # the displayed channel); dead spans hatched gray; markers per track.
                 self._draw_key_spans(ax, self._channel_key(), "tab:red")
                 self._draw_key_spans(ax, self._modality_key(), "tab:orange")
+                self._draw_marker_spans(ax, self._channel_key())
 
         def _label_axes(self) -> None:
             ax = getattr(self, "_ax", None)
@@ -331,28 +510,35 @@ def _build_signal_annotator_class():
             ax.set_xlabel("time (s)")
             ax.set_ylabel(f"{mod} ({_MODALITY_UNITS.get(mod, 'a.u.')})")
 
-    return NoiseAnnotator
+    return SignalAnnotator
 
 
 def _build_sensor_annotator_class():
     """Build the sensor-centric annotator (datanavigator imported here, lazily)."""
     from datanavigator.plots import PlotBrowser
 
-    class SensorNoiseAnnotator(_NoiseMarkingMixin, PlotBrowser):
+    class SensorAnnotator(_MarkingMixin, PlotBrowser):
         """PlotBrowser showing one sensor's modalities stacked into time-aligned
-        subplots, marking noise into the shared ``.delsys-noise`` sidecar.
+        subplots, marking noise + typed events into the shared ``.delsys-events``
+        sidecar.
 
         EMGQ / FSR / Analog get one subplot **per sub-channel** (so each Quattro
         channel, FSR pad, or Sync line — and a Sync that carries only one line — can
         be marked individually); EMGS/EKG (single trace) and ACC/GYRO (X/Y/Z
         overlaid) stay as one whole-modality subplot. A sensor that mixes, say, EMGQ
         with ACC/GYRO shows all of them. Marking targets the hovered subplot's
-        address; the **Sensor scope** toggle instead fans the mark across every
-        modality of the sensor (a wall-clock noise burst hits them all).
+        address; the **Sensor scope** toggle instead fans a *noise* mark across
+        every modality of the sensor (a wall-clock noise burst hits them all).
         """
 
-        def __init__(self, lf, path: Optional[str] = None, figure_handle=None) -> None:
-            self._init_noise_state(lf, path)
+        def __init__(
+            self,
+            lf,
+            path: Optional[str] = None,
+            figure_handle=None,
+            marker_specs: Optional[List[Tuple[str, int, str]]] = None,
+        ) -> None:
+            self._init_marking_state(lf, path, marker_specs or _normalize_marker_specs(None))
             self._sensors = [s for s in lf.sensors if self._markable_modalities(s)]
             self._panel_axes: List = []  # [(Axes, key)] per update
             item_names = [self._sensor_label(s) for s in self._sensors]
@@ -425,7 +611,7 @@ def _build_sensor_annotator_class():
 
         @property
         def _sensor_scope(self) -> bool:
-            """Whether a mark fans across the whole sensor (all its modalities)."""
+            """Whether a noise mark fans across the whole sensor (all its modalities)."""
             return "Sensor scope" in self.buttons and self.buttons["Sensor scope"].state
 
         def _scope_keys(self, key: str) -> List[str]:
@@ -437,7 +623,7 @@ def _build_sensor_annotator_class():
         # -- controls + view ----------------------------------------------
 
         def _add_controls(self) -> None:
-            self._add_noise_keybindings(dead_key="d")
+            self._add_marking_keybindings(dead_key="d")
             # Off -> mark the hovered sub-channel/modality; On -> the whole sensor.
             self.buttons.add(text="Sensor scope", type_="Toggle", start_state=False)
 
@@ -466,22 +652,30 @@ def _build_sensor_annotator_class():
                     self._draw_key_spans(
                         ax, _noise.format_key(pk.sensor, pk.modality), "tab:orange"
                     )
+                self._draw_marker_spans(ax, _noise.key_address(key))
             plt.draw()
 
-    return SensorNoiseAnnotator
+    return SensorAnnotator
 
 
-def launch_noise_annotator(lf, path: Optional[str] = None, view: str = "signal"):
-    """Build and show a noise annotator over ``lf`` (returns the instance).
+def launch_annotator(
+    lf, path: Optional[str] = None, view: str = "signal", events: MarkerSpecArg = None
+):
+    """Build and show an annotator over ``lf`` (returns the instance).
 
     ``view="signal"`` (default) opens the per-channel SignalBrowser; ``"sensor"``
     opens the per-sensor stacked-modality PlotBrowser. Both author the same
-    ``<stem>.delsys-noise`` sidecar.
+    ``<stem>.delsys-events`` sidecar (noise + the ``events`` marker tracks).
     """
+    marker_specs = _normalize_marker_specs(events)
     if view == "signal":
         cls = _build_signal_annotator_class()
     elif view == "sensor":
         cls = _build_sensor_annotator_class()
     else:
         raise ValueError(f"view must be 'signal' or 'sensor'; got {view!r}.")
-    return cls(lf, path=path)
+    return cls(lf, path=path, marker_specs=marker_specs)
+
+
+#: Back-compat alias — :func:`launch_annotator` is the canonical name.
+launch_noise_annotator = launch_annotator

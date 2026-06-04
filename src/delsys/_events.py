@@ -120,37 +120,61 @@ def write_events(path: str, events: Dict[str, dict]) -> str:
 
 
 def _clean_marker_signals(signals: Dict[str, object]) -> Dict[str, list]:
-    """Coerce a marker section's per-signal value to a list of float sequences,
-    dropping empties. Accepts the ``EventData`` dict form (``{added, default}``)
-    or a bare list of sequences."""
+    """Coerce a marker section's per-signal value to its on-disk form, dropping
+    empties. Each event serializes as a **bare** ``[t, ...]`` sequence, or the
+    object form ``{"seq": [...], "note": ..., "tags": [...]}`` when it carries a
+    note/tags (so plain marks stay terse and tidy)."""
     out: Dict[str, list] = {}
     for key, val in signals.items():
-        seqs = _as_sequences(val)
-        if seqs:
-            out[key] = seqs
+        recs = _as_records(val)
+        if recs:
+            out[key] = [_record_to_disk(r) for r in recs]
     return out
 
 
-def _as_sequences(val) -> List[List[float]]:
-    """Normalize a marker value into ``[[t, ...], ...]`` float sequences.
+def _as_records(val) -> List[dict]:
+    """Normalize a marker value into ``[{"seq": [t, ...], "note": str|None,
+    "tags": [...]}, ...]``.
 
-    Accepts a bare ``[[t0, t1], ...]`` list, or an ``EventData``-style mapping
+    Each event element may be a **bare** sequence ``[t0, t1]`` or the object form
+    ``{"seq": [...], "note": ..., "tags": [...]}`` (per-event annotation). The
+    container may be a list, or an ``EventData``-style mapping
     ``{"default": [...], "added": [...]}`` (their concatenation, manual ``added``
     after algorithm ``default``).
     """
-    if isinstance(val, dict):
+    if isinstance(val, dict) and ("default" in val or "added" in val):
         raw = list(val.get("default") or []) + list(val.get("added") or [])
     else:
         raw = val or []
-    out: List[List[float]] = []
-    for seq in raw:
-        if seq is None:
+    out: List[dict] = []
+    for ev in raw:
+        if ev is None:
             continue
+        if isinstance(ev, dict):
+            seq_raw, note, tags = ev.get("seq"), ev.get("note"), list(ev.get("tags") or [])
+        else:
+            seq_raw, note, tags = ev, None, []
         try:
-            out.append([float(x) for x in seq])
+            seq = [float(x) for x in seq_raw]
         except (TypeError, ValueError):
             continue
+        if not seq:
+            continue
+        out.append({"seq": seq, "note": note, "tags": tags})
     return out
+
+
+def _record_to_disk(rec: dict):
+    """Serialize one event record: a bare ``[t, ...]`` unless it carries a
+    note/tags, in which case the object form (empty fields omitted)."""
+    if rec.get("note") or rec.get("tags"):
+        out: dict = {"seq": [float(x) for x in rec["seq"]]}
+        if rec.get("note"):
+            out["note"] = rec["note"]
+        if rec.get("tags"):
+            out["tags"] = list(rec["tags"])
+        return out
+    return [float(x) for x in rec["seq"]]
 
 
 # ---------------------------------------------------------------------------
@@ -177,12 +201,28 @@ def marker_types(path: str) -> List[str]:
     return sorted(name for name in events if name != NOISE_TYPE)
 
 
-def read_marker_signals(path: str, event_type: str) -> Dict[str, List[List[float]]]:
-    """Per-signal sequences for one marker type: ``{address-key: [[t, ...], ...]}``."""
+def read_marker_records(path: str, event_type: str) -> Dict[str, List[dict]]:
+    """Per-signal event **records** for one marker type:
+    ``{address-key: [{"seq": [...], "note": str|None, "tags": [...]}, ...]}``."""
     section = read_events(path).get("events", {}).get(event_type)
     if not section:
         return {}
-    return _clean_marker_signals(section.get("signals") or {})
+    out: Dict[str, List[dict]] = {}
+    for key, val in (section.get("signals") or {}).items():
+        recs = _as_records(val)
+        if recs:
+            out[key] = recs
+    return out
+
+
+def read_marker_signals(path: str, event_type: str) -> Dict[str, List[List[float]]]:
+    """Per-signal sequences (times only) for one marker type:
+    ``{address-key: [[t, ...], ...]}`` — note/tags dropped (see
+    :func:`read_marker_records` to keep them)."""
+    return {
+        key: [r["seq"] for r in recs]
+        for key, recs in read_marker_records(path, event_type).items()
+    }
 
 
 def collapse_markers(
@@ -191,9 +231,10 @@ def collapse_markers(
     """Flatten one marker type across signal addresses into trial-level markers.
 
     Each mark — placed per signal — becomes a trial-level record carrying its
-    provenance::
+    provenance (and any per-event note/tags)::
 
-        [{"seq": [t] | [a, b], "address": "3.EMGS", "label": "RForearm"}, ...]
+        [{"seq": [t] | [a, b], "address": "3.EMGS", "label": "RForearm",
+          "note": str|None, "tags": [...]}, ...]
 
     sorted by ``seq[0]``. **Every** mark is kept by default (``dedupe=None``), so
     the same logical event placed from two signals shows up twice — *visible
@@ -203,16 +244,23 @@ def collapse_markers(
 
     Args:
         path: Unified ``<stem>.delsys-events`` path.
-        event_type: A marker type name (e.g. ``"1"``).
+        event_type: A marker type slug (e.g. ``"1"``).
         dedupe: Proximity tolerance in seconds, or ``None`` to keep all.
     """
-    signals = read_marker_signals(path, event_type)
     records: List[dict] = []
-    for key, seqs in signals.items():
+    for key, recs in read_marker_records(path, event_type).items():
         pk = _noise.parse_key(key)
         addr = _noise.format_key(pk.sensor, pk.modality, pk.coord)
-        for seq in seqs:
-            records.append({"seq": seq, "address": addr, "label": pk.label})
+        for r in recs:
+            records.append(
+                {
+                    "seq": r["seq"],
+                    "address": addr,
+                    "label": pk.label,
+                    "note": r.get("note"),
+                    "tags": r.get("tags") or [],
+                }
+            )
     records.sort(key=lambda r: (r["seq"][0] if r["seq"] else 0.0))
     if dedupe is None:
         return records

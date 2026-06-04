@@ -54,7 +54,7 @@ color = "tab:green"
 
 ## Build cuts (each a commit; mirror the last cut's phasing)
 
-1. **delsys, no Qt — foundation (testable down payment).**
+1. **delsys, no Qt — foundation (testable down payment). DONE (0.5.0a2).**
    - `delsys/_project.py`: resolve + load `delsys_project.toml` via `tomlkit`
      (env → walk-up → defaults); cache by path.
    - `delsys/_event_types.py`: slug model + read/write the `[[event_types]]` tables

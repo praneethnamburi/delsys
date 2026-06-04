@@ -29,8 +29,8 @@ Two kinds of mark (hover the cursor at the spot, then press):
 - **typed markers** — point (``size=1``, one press) or window (``size=2``, two
   presses) events of an arbitrary type (``"1"``, ``"2"``, …), authored *per
   signal* (the address is provenance) and consumed at analysis time as trial-level
-  markers (:func:`delsys._events.collapse_markers`). The digit key adds the type;
-  ``alt+<digit>`` removes the nearest.
+  markers (:func:`delsys._events.collapse_markers`). Each type's bound key adds
+  it; ``alt+<key>`` removes the nearest.
 
 A single **Save** button writes every track to the one ``<stem>.delsys-events``.
 """
@@ -38,23 +38,15 @@ A single **Save** button writes every track to the one ``<stem>.delsys-events``.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 from matplotlib import pyplot as plt
 
-from delsys import _events, _noise
+from delsys import _event_types, _events, _noise
 from delsys._util import _mod_to_attr, _trim_location
 
 #: Sentinel span for a whole-recording dead channel (open both ends).
 _WHOLE_EXTENT = [None, None]
-
-#: Default marker tracks when a view is opened without an explicit ``events=``
-#: spec: a point track ``"1"`` and a window track ``"2"`` (the "1-event /
-#: 2-event" shape). Each entry is ``(name, size)``.
-_DEFAULT_MARKER_SPECS = (("1", 1), ("2", 2))
-
-#: Colors cycled across marker tracks (noise has its own red/orange/gray scheme).
-_MARKER_COLORS = ("tab:green", "tab:blue", "tab:purple", "tab:brown", "tab:olive")
 
 #: Conventional Trigno display units per modality, for the y-axis label. These
 #: are *conventions* (not read from the file — the loader doesn't carry units);
@@ -79,31 +71,14 @@ _MARKABLE_ORDER = ("EMGS", "EMGD", "EMGQ", "EKG", "ACC", "GYRO", "FSR", "Analog"
 #: actual signals present, so e.g. a single-trace Sync (Analog) shows one panel.
 _SPLIT_MODALITIES = ("EMGQ", "FSR", "Analog")
 
-#: Spec form accepted by :func:`_normalize_marker_specs` for the ``events=`` arg.
-MarkerSpecArg = Union[None, Dict[str, int], Sequence[Union[str, Tuple[str, int]]]]
+#: Internal marker spec tuple: ``(slug, label, key, size, color)``. ``slug`` keys
+#: the in-memory + on-disk track; ``key`` is the char bound for marking; ``label``
+#: is the display name. Built from :class:`delsys._event_types.EventType`.
+MarkerSpec = Tuple[str, str, str, int, str]
 
 
-def _normalize_marker_specs(events: MarkerSpecArg) -> List[Tuple[str, int, str]]:
-    """Normalize the ``events=`` argument into ``[(name, size, color), ...]``.
-
-    Accepts ``None`` (the :data:`_DEFAULT_MARKER_SPECS` point+window pair), a
-    ``{name: size}`` mapping, or a sequence of names (size 1) / ``(name, size)``
-    pairs. Colors are cycled from :data:`_MARKER_COLORS`.
-    """
-    if events is None:
-        items: List = list(_DEFAULT_MARKER_SPECS)
-    elif isinstance(events, dict):
-        items = list(events.items())
-    else:
-        items = list(events)
-    specs: List[Tuple[str, int, str]] = []
-    for i, it in enumerate(items):
-        if isinstance(it, (list, tuple)):
-            name, size = it[0], (it[1] if len(it) > 1 else 1)
-        else:
-            name, size = it, 1
-        specs.append((str(name), int(size), _MARKER_COLORS[i % len(_MARKER_COLORS)]))
-    return specs
+def _default_marker_specs() -> List[MarkerSpec]:
+    return _event_types.to_marker_specs(_event_types.default_event_types())
 
 
 class _MarkingMixin:
@@ -116,7 +91,7 @@ class _MarkingMixin:
 
     - ``_ann`` — the **noise** track: ``{address: {"windows": [...], "dead": [...]}}``.
     - ``_markers`` — the **typed marker** tracks:
-      ``{type_name: {address: [[t, ...], ...]}}``.
+      ``{slug: {address: [{"seq": [...], "note": ..., "tags": [...]}, ...]}}``.
 
     The browser subclass implements :meth:`_key_for_event` (which noise address a
     cursor targets) and its own overlay drawing; everything common lives here so
@@ -126,7 +101,7 @@ class _MarkingMixin:
     # -- state + I/O ------------------------------------------------------
 
     def _init_marking_state(
-        self, lf, path: Optional[str], marker_specs: List[Tuple[str, int, str]]
+        self, lf, path: Optional[str], marker_specs: List[MarkerSpec]
     ) -> None:
         """Set up sidecar path + in-memory annotation. Call from ``__init__``."""
         self._lf = lf
@@ -136,13 +111,13 @@ class _MarkingMixin:
         self._markers: Dict[str, Dict[str, list]] = self._load_markers()
         self._mark_buffer: list = []  # (track, key, x) for multi-press sequences
         self._overlay_artists: list = []
-        # event.key -> spec, for the digit-key dispatch (bound methods only, so
+        # event.key -> spec, for the marking-key dispatch (bound methods only, so
         # datanavigator's add_key_binding passes the matplotlib event through).
         self._marker_add_by_key: Dict[str, Tuple[str, int]] = {
-            name: (name, size) for name, size, _ in marker_specs
+            key: (slug, size) for slug, _label, key, size, _color in marker_specs
         }
         self._marker_remove_by_key: Dict[str, str] = {
-            f"alt+{name}": name for name, _, _ in marker_specs
+            f"alt+{key}": slug for slug, _label, key, _size, _color in marker_specs
         }
 
     def _load_noise(self) -> Dict[str, dict]:
@@ -164,17 +139,19 @@ class _MarkingMixin:
         return ann
 
     def _load_markers(self) -> Dict[str, Dict[str, list]]:
-        """Seed each marker track from the unified file, keyed by address."""
-        out: Dict[str, Dict[str, list]] = {name: {} for name, _, _ in self._marker_specs}
+        """Seed each marker track from the unified file, keyed by address.
+
+        Stored as **records** (``{"seq", "note", "tags"}``) so a per-event note/tag
+        on disk survives an open→save round-trip even before the notes UI lands.
+        """
+        out: Dict[str, Dict[str, list]] = {slug: {} for slug, *_ in self._marker_specs}
         if not os.path.exists(self._events_path):
             return out
-        for name, _size, _color in self._marker_specs:
-            sigs = _events.read_marker_signals(self._events_path, name)
-            slot = out[name]
-            for key, seqs in sigs.items():
-                slot.setdefault(_noise.key_address(key), []).extend(
-                    [list(s) for s in seqs]
-                )
+        for slug, _label, _key, _size, _color in self._marker_specs:
+            recs = _events.read_marker_records(self._events_path, slug)
+            slot = out[slug]
+            for key, rs in recs.items():
+                slot.setdefault(_noise.key_address(key), []).extend([dict(r) for r in rs])
         return out
 
     def save(self, event=None) -> str:
@@ -191,14 +168,14 @@ class _MarkingMixin:
         }
         if noise_signals:
             doc[_events.NOISE_TYPE] = {"signals": noise_signals}
-        for name, size, _color in self._marker_specs:
+        for slug, _label, _key, size, _color in self._marker_specs:
             sigs = {
-                _noise.relabel_key(self._lf, addr): seqs
-                for addr, seqs in self._markers.get(name, {}).items()
-                if seqs
+                _noise.relabel_key(self._lf, addr): recs
+                for addr, recs in self._markers.get(slug, {}).items()
+                if recs
             }
             if sigs:
-                doc[name] = {"size": size, "signals": sigs}
+                doc[slug] = {"size": size, "signals": sigs}
         path = _events.write_events(self._events_path, doc)
         n = sum(len(s.get("signals", {})) for s in doc.values())
         print(f"delsys.view: saved {n} marked address(es) across {len(doc)} type(s) -> {path}")
@@ -303,29 +280,29 @@ class _MarkingMixin:
         one signal it was placed from, regardless of the noise Mod-scope toggle)."""
         return self._key_for_event(event)
 
-    def _marker_slot(self, name: str, key: str) -> list:
-        return self._markers.setdefault(name, {}).setdefault(key, [])
+    def _marker_slot(self, slug: str, key: str) -> list:
+        return self._markers.setdefault(slug, {}).setdefault(key, [])
 
-    def _mark_marker(self, name: str, size: int, event=None) -> None:
+    def _mark_marker(self, slug: str, size: int, event=None) -> None:
         key = self._marker_key_for_event(event)
         x = getattr(event, "xdata", None)
         if key is None or x is None:
             return
         key = _noise.key_address(key)
-        seq = self._collect(name, size, key, x)
+        seq = self._collect(slug, size, key, x)
         if seq is not None:
-            self._marker_slot(name, key).append(seq)
+            self._marker_slot(slug, key).append({"seq": seq, "note": None, "tags": []})
             self.update()
 
-    def _remove_marker(self, name: str, event=None) -> None:
+    def _remove_marker(self, slug: str, event=None) -> None:
         key = self._marker_key_for_event(event)
         x = getattr(event, "xdata", None)
         if key is None or x is None:
             return
-        seqs = self._markers.get(name, {}).get(_noise.key_address(key))
-        if seqs:
-            i = min(range(len(seqs)), key=lambda i: abs(seqs[i][0] - x))
-            seqs.pop(i)
+        recs = self._markers.get(slug, {}).get(_noise.key_address(key))
+        if recs:
+            i = min(range(len(recs)), key=lambda i: abs(recs[i]["seq"][0] - x))
+            recs.pop(i)
             self.update()
 
     def _mark_marker_event(self, event=None) -> None:
@@ -334,9 +311,9 @@ class _MarkingMixin:
             self._mark_marker(spec[0], spec[1], event)
 
     def _remove_marker_event(self, event=None) -> None:
-        name = self._marker_remove_by_key.get(getattr(event, "key", None))
-        if name is not None:
-            self._remove_marker(name, event)
+        slug = self._marker_remove_by_key.get(getattr(event, "key", None))
+        if slug is not None:
+            self._remove_marker(slug, event)
 
     # -- keybindings ------------------------------------------------------
 
@@ -356,14 +333,14 @@ class _MarkingMixin:
             self.add_key_binding(
                 dead_key, self._toggle_dead_at, description="Toggle dead (whole recording)"
             )
-        # Typed marker tracks (digit add / alt+digit remove; bound-method dispatch).
-        for name, size, _color in self._marker_specs:
+        # Typed marker tracks (key add / alt+key remove; bound-method dispatch).
+        for slug, label, key, size, _color in self._marker_specs:
             kind = "point" if size == 1 else "window"
             self.add_key_binding(
-                name, self._mark_marker_event, description=f"Add {name}-event ({kind})"
+                key, self._mark_marker_event, description=f"Add {label} ({kind})"
             )
             self.add_key_binding(
-                f"alt+{name}", self._remove_marker_event, description=f"Remove nearest {name}-event"
+                f"alt+{key}", self._remove_marker_event, description=f"Remove nearest {label}"
             )
         self.buttons.add(text="Save", type_="Push", action_func=lambda e: self.save())
 
@@ -395,8 +372,9 @@ class _MarkingMixin:
     def _draw_marker_spans(self, ax, key: str) -> None:
         """Draw every marker track on ``ax`` for one address: size-1 as a dashed
         vertical line, size>=2 as a translucent span, in the track's color."""
-        for name, size, color in self._marker_specs:
-            for seq in self._markers.get(name, {}).get(key, []):
+        for slug, _label, _k, size, color in self._marker_specs:
+            for rec in self._markers.get(slug, {}).get(key, []):
+                seq = rec["seq"]
                 if size >= 2 and len(seq) >= 2:
                     self._overlay_artists.append(
                         ax.axvspan(seq[0], seq[1], alpha=0.15, color=color)
@@ -424,9 +402,9 @@ def _build_signal_annotator_class():
             lf,
             path: Optional[str] = None,
             figure_handle=None,
-            marker_specs: Optional[List[Tuple[str, int, str]]] = None,
+            marker_specs: Optional[List[MarkerSpec]] = None,
         ) -> None:
-            self._init_marking_state(lf, path, marker_specs or _normalize_marker_specs(None))
+            self._init_marking_state(lf, path, marker_specs or _default_marker_specs())
             self._signals = list(lf.signals)
             # Dropdown labels = the coord-ful signal address for each channel.
             self._keys: List[str] = [_noise.format_signal_key(s) for s in self._signals]
@@ -536,9 +514,9 @@ def _build_sensor_annotator_class():
             lf,
             path: Optional[str] = None,
             figure_handle=None,
-            marker_specs: Optional[List[Tuple[str, int, str]]] = None,
+            marker_specs: Optional[List[MarkerSpec]] = None,
         ) -> None:
-            self._init_marking_state(lf, path, marker_specs or _normalize_marker_specs(None))
+            self._init_marking_state(lf, path, marker_specs or _default_marker_specs())
             self._sensors = [s for s in lf.sensors if self._markable_modalities(s)]
             self._panel_axes: List = []  # [(Axes, key)] per update
             item_names = [self._sensor_label(s) for s in self._sensors]
@@ -659,15 +637,17 @@ def _build_sensor_annotator_class():
 
 
 def launch_annotator(
-    lf, path: Optional[str] = None, view: str = "signal", events: MarkerSpecArg = None
+    lf, path: Optional[str] = None, view: str = "signal", events=None
 ):
     """Build and show an annotator over ``lf`` (returns the instance).
 
     ``view="signal"`` (default) opens the per-channel SignalBrowser; ``"sensor"``
     opens the per-sensor stacked-modality PlotBrowser. Both author the same
-    ``<stem>.delsys-events`` sidecar (noise + the ``events`` marker tracks).
+    ``<stem>.delsys-events`` sidecar (noise + the marker tracks). The marker
+    vocabulary is resolved by :func:`delsys._event_types.resolve` — an explicit
+    ``events=`` wins, else the project config, else the built-in default.
     """
-    marker_specs = _normalize_marker_specs(events)
+    marker_specs = _event_types.to_marker_specs(_event_types.resolve(lf, events))
     if view == "signal":
         cls = _build_signal_annotator_class()
     elif view == "sensor":

@@ -222,7 +222,7 @@ def test_marker_remove_nearest(fixtures_dir, tmp_path):
     ann._mark_marker("1", 1, SimpleNamespace(xdata=2.0))
     ann._remove_marker("1", SimpleNamespace(xdata=1.9))  # nearest the second
 
-    assert ann._markers["1"][_addr0(lf)] == [[1.0]]
+    assert [r["seq"] for r in ann._markers["1"][_addr0(lf)]] == [[1.0]]
 
 
 def test_marker_dispatch_by_event_key(fixtures_dir, tmp_path):
@@ -258,8 +258,9 @@ def test_markers_and_noise_coexist_in_one_file(fixtures_dir, tmp_path):
 def test_custom_marker_specs(fixtures_dir, tmp_path):
     lf = _log(fixtures_dir, tmp_path)
     ann = lf.view(events={"onset": 1, "phrase": 2})
-    names = [n for n, _, _ in ann._marker_specs]
-    assert names == ["onset", "phrase"]
+    slugs = [slug for slug, *_ in ann._marker_specs]
+    assert slugs == ["onset", "phrase"]
+    # add/remove dispatch is keyed by the bound key (= the name for ad-hoc specs).
     assert "onset" in ann._marker_add_by_key and "alt+phrase" in ann._marker_remove_by_key
 
 

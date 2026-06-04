@@ -600,9 +600,12 @@ class Log:
                 sensor+modality (``Mod scope`` toggle). ``"sensor"`` — per-sensor
                 ``PlotBrowser``: one sensor's modalities (EMG/ACC/GYRO/…) as
                 stacked subplots (good for blips shared across a sensor's channels).
-            events: Marker tracks to offer. ``None`` (default) is a point track
-                ``"1"`` + a window track ``"2"``; pass a ``{name: size}`` mapping
-                or a sequence of names / ``(name, size)`` pairs to customize.
+            events: Marker tracks to offer. ``None`` (default) loads the project's
+                event-type vocabulary from a ``delsys_project.toml`` (resolved via
+                ``DELSYS_PROJECT_CONFIG`` / walk-up from the Log's file), falling
+                back to a built-in point ``"1"`` + window ``"2"`` pair. Pass a
+                ``{name: size}`` mapping or a sequence of names / ``(name, size)``
+                pairs / :class:`delsys._event_types.EventType` to override ad-hoc.
             path: Sidecar path to read/write. Defaults to a sibling
                 ``<stem>.delsys-events`` of this Log's source file.
 

@@ -144,6 +144,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folded in on next save). `apply_events_noise(lf, path)` masks off the `noise`
   type. datanavigator's per-`Event` save is bypassed in favour of this one
   unified write — it stays only the in-memory marking engine.
+  - **Per-event note/tags (format-ready).** A marker event serializes as a bare
+    `[t, ...]` or, when annotated, the object form `{"seq": [...], "note": ...,
+    "tags": [...]}`; `read_marker_records` / `collapse_markers` surface them and the
+    annotator round-trips them. (Authoring UI is a follow-up.)
+- **Per-project config + named event types** (`delsys_project.toml`, in
+  `delsys._project` / `delsys._event_types`) — a project's delsys settings live in a
+  TOML committed in its repo; today it holds the **event-type vocabulary**, later
+  things like `target_sr`. Resolution: `DELSYS_PROJECT_CONFIG` env → walk up from
+  the trial folder for a `delsys_project.toml` → built-in defaults. Types are
+  **slug-keyed** (`slug` written into `.delsys-events`; `label` is what a rename
+  edits, so rename needs no file migration) with a bound `key`, `size`, and
+  `color` (`EventType`). `Log.view()` loads its marker tracks from the resolved
+  config (an explicit `events=` still overrides); `_project.scaffold(path)` writes a
+  starter config. Reads/writes via `tomlkit`, so an interactive event-type edit is
+  **surgical** — it preserves comments and the rest of the document. Adds a
+  `tomlkit` dependency.
 - **`Log.view(kind=..., events=...)`** — interactive annotator (`delsys.annotate`;
   `datanavigator` imported lazily so the delsys core stays dnav-free). Marks two
   kinds of annotation into one `<stem>.delsys-events` sidecar (shared logic via

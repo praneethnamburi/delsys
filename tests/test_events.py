@@ -88,6 +88,38 @@ def test_read_missing_file_is_empty(tmp_path):
     assert doc == {"schema": _events.EVENTS_SCHEMA, "events": {}}
 
 
+def test_marker_note_tags_roundtrip(tmp_path):
+    """An event may carry a per-event note/tags (object form); bare events stay bare."""
+    p = tmp_path / ("x" + _events.EVENTS_SUFFIX)
+    _events.write_events(
+        str(p),
+        {
+            "1": {
+                "size": 1,
+                "signals": {
+                    "3.EMGS | T": [
+                        [1.40],  # bare
+                        {"seq": [2.10], "note": "good example", "tags": ["clean"]},
+                    ]
+                },
+            }
+        },
+    )
+    # on disk: bare stays a list, annotated stays an object
+    disk = _events.read_events(str(p))["events"]["1"]["signals"]["3.EMGS | T"]
+    assert disk[0] == [1.40]
+    assert disk[1] == {"seq": [2.10], "note": "good example", "tags": ["clean"]}
+    # records expose note/tags; seq-only view drops them
+    recs = _events.read_marker_records(str(p), "1")["3.EMGS | T"]
+    assert recs[0] == {"seq": [1.40], "note": None, "tags": []}
+    assert recs[1]["note"] == "good example" and recs[1]["tags"] == ["clean"]
+    assert _events.read_marker_signals(str(p), "1")["3.EMGS | T"] == [[1.40], [2.10]]
+    # collapse surfaces note/tags per trial-level mark
+    collapsed = _events.collapse_markers(str(p), "1")
+    annotated = next(r for r in collapsed if r["seq"] == [2.10])
+    assert annotated["note"] == "good example" and annotated["tags"] == ["clean"]
+
+
 def test_marker_signals_accepts_eventdata_dict(tmp_path):
     """A marker value may arrive as a datanavigator ``EventData`` mapping; the
     concatenation of ``default`` + ``added`` is the sequence list."""

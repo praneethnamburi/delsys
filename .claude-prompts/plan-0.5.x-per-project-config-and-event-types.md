@@ -72,21 +72,30 @@ color = "tab:green"
      for it, but feeding it into `Log(target_sr=...)` intersects the open
      "reconsider TARGET_SR defaults" item in `TODO.md` and deserves its own pass.
 
-2. **datanavigator — modal primitives.** Lift dustrack's `_make_confirm_overlay_class`
-   (in `dustrack/dustrack/_overlays.py`, lines ~370–603) up as a public canonical
-   `confirm(figure, title, message, buttons, default, severity, checkboxes)` built on
-   the Qt window datanavigator already holds (`find_qt_window`); add a **text-input**
-   dialog (`prompt_text(figure, title, prompt, default)`) in the same style. Off-Qt
-   fallback returns the default / None so headless tests don't block. CHANGELOG on
-   `master`. (This is also the primitive the deferred **warn-on-close** needs.)
+2. **datanavigator — modal primitives. DONE (1.6.0-dev, commit `874cd7d`).**
+   `datanavigator.confirm()` + `prompt_text()` in `_modals.py` (promoted from
+   DUSTrack's `ConfirmOverlay`); off-Qt fallback returns the default; tests cover it.
 
-3. **dustrack — consume the promoted overlay.** Re-point `dustrack/_overlays` /
-   `_close_guard` at datanavigator's confirm; retire the local copy. Re-run
-   `tests/test_save_on_close.py`.
+3. **dustrack — consume the promoted overlay** (deferred follow-up; pure dedup, no
+   feature impact). Re-point `dustrack/_overlays` / `_close_guard` at
+   `datanavigator.confirm`; retire the local `_make_confirm_overlay_class`. Re-run
+   `tests/test_save_on_close.py`. Touches dustrack's tested close-guard — own pass.
 
-4. **delsys — interactive type management in `view()`.** New / Rename / Remove type
-   buttons using the datanavigator dialogs; live key rebinding; writes back to the
-   project `delsys_project.toml`.
+4. **delsys — interactive type management in `view()`** (open UX decisions — see
+   below; *not built*). New / Rename / Remove type buttons using the datanavigator
+   dialogs; live key rebinding; writes back to the project `delsys_project.toml`.
+
+### Cut 4 open UX decisions (settle before building)
+- **Which type to rename/remove** — a "Type" dropdown (`StateVariable`) selecting
+  the active type, vs. prompting for the slug. Dropdown is nicer but needs dynamic
+  `states` updates (datanavigator widget support to verify).
+- **Key assignment for a new type** — auto-pick the next free digit (1–9), or prompt.
+- **Point vs window for a new type** — a `confirm` with Point/Window buttons, or
+  default to point and let the TOML set `size=2`.
+- **No project config present** — `confirm` to scaffold a `delsys_project.toml` in
+  the Log's folder, vs. disabling the buttons until one exists.
+- Note: with cut 1, named types already work by **hand-editing the TOML**; cut 4 is
+  the in-GUI convenience on top.
 
 ## Carry-over follow-ups (already in TODO.md)
 - Multi-char marker-track keybindings (today only single-key names fire).

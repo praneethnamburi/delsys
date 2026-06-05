@@ -14,15 +14,41 @@ from typing import Dict, Optional, Tuple
 #: ``None`` for a modality means "skip resampling" — currently honored by the
 #: Discover-basic and Discover-link Trigno-base parsers; not yet by the
 #: EMGworks parser or by link devices (see ``TODO.md``).
+#:
+#: The default is now **native** (``None``) for the uniformly-sampled Trigno-base
+#: modalities, so a bare ``delsys.Log(h5)`` preserves their native rates and never
+#: resamples / anti-alias-filters them on load. The **link devices** below
+#: (``SmO2``, ``Thb``, ``VO2``, ``HR``) keep their target rates: they arrive
+#: irregularly (breath-by-breath / per-beat), so they must be resampled onto a
+#: uniform grid and ``None`` is not valid for them. To also resample the base
+#: modalities on load, pass ``target_sr=`` explicitly or restore the reference
+#: dict below — the rates these modalities were previously normalized to:
+#:
+#: TARGET_SR: Dict[str, Optional[float]] = {
+#:     "EMGS": 1920,
+#:     "EMGD": 1920,
+#:     "EMGQ": 1920,
+#:     "ACC": 120,
+#:     "GYRO": 120,
+#:     "FSR": 120,
+#:     "EKG": 120,
+#:     "Analog": 2400,
+#:     "SmO2": 5,
+#:     "Thb": 5,
+#:     "VO2": 1,
+#:     "HR": 1,
+#: }
 TARGET_SR: Dict[str, Optional[float]] = {
-    "EMGS": 1920,
-    "EMGD": 1920,
-    "EMGQ": 1920,
-    "ACC": 120,
-    "GYRO": 120,
-    "FSR": 120,
-    "EKG": 120,
-    "Analog": 2400,
+    "EMGS": None,
+    "EMGD": None,
+    "EMGQ": None,
+    "ACC": None,
+    "GYRO": None,
+    "FSR": None,
+    "EKG": None,
+    "Analog": None,
+    # Link devices: irregularly sampled -> must be resampled onto a uniform grid
+    # (``None`` is not honored for these). Keep the reference rates.
     "SmO2": 5,
     "Thb": 5,
     "VO2": 1,

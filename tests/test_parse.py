@@ -2,6 +2,7 @@
 
 import pytest
 
+import delsys
 from delsys._constants import LINK_DEVICE_REGISTRY
 from delsys._parse import (
     _detect_parser,
@@ -69,6 +70,24 @@ def test_parse_hdr_discover_carries_metadata(fixtures_dir):
     assert isinstance(hdr["duration_s"], float) and hdr["duration_s"] > 0
     assert isinstance(hdr["sensor_signal_names"], list) and len(hdr["sensor_signal_names"]) > 0
     assert isinstance(hdr["sensor_name_mode"], dict)
+
+
+# ---------------------------------------------------------------------------
+# delsys.duration — public cheap header read
+# ---------------------------------------------------------------------------
+
+
+def test_duration_discover_matches_header(fixtures_dir):
+    """Public ``duration`` returns the Discover header's ``duration_s`` value."""
+    path = str(fixtures_dir / "discover164_mvc.csv")
+    assert delsys.duration(path) == _parse_hdr(path)["duration_s"]
+
+
+def test_duration_emgworks_raises(fixtures_dir):
+    """EMGworks headers carry no duration; ``duration`` raises a clear error
+    rather than a bare KeyError on the internal dict."""
+    with pytest.raises(ValueError, match="do not record duration"):
+        delsys.duration(str(fixtures_dir / "emgworks.csv"))
 
 
 # ---------------------------------------------------------------------------

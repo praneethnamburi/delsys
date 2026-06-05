@@ -51,6 +51,9 @@ from delsys._constants import (
     TARGET_SR,
 )
 from delsys._metadata import SensorInfo, SensorLog, SigInfoDelsys
+from delsys._parse import _parse_hdr
+from delsys._util import _mod_to_attr as mod_to_attr
+from delsys._util import _modset_to_strlist as modset_to_strlist
 from delsys.cleaning import CleaningConfig, CleaningResult, CleaningSession
 from delsys.ekg import EKG
 from delsys.emg import EMG
@@ -59,6 +62,35 @@ from delsys._process import process, read_channelmap
 from delsys.log import Log, to_native_h5
 from delsys.sensor import Sensor
 from delsys.signals import FSR, IMU, Signal, VO2Master
+
+
+def duration(fname: str) -> float:
+    """Trial length in seconds, read from the CSV header without loading signals.
+
+    A cheap metadata read — only the header rows are parsed — so it is suitable
+    for building file inventories over a whole study without constructing a
+    :class:`Log` per trial.
+
+    Args:
+        fname: Path to a Delsys CSV export.
+
+    Returns:
+        Collection length in seconds.
+
+    Raises:
+        ValueError: For EMGworks exports, whose header does not record a
+            duration (only Trigno Discover writes one). Construct a
+            :class:`Log` and measure the signals if you need EMGworks
+            durations.
+    """
+    hdr = _parse_hdr(fname)
+    if "duration_s" not in hdr:
+        raise ValueError(
+            f"{hdr['application']} files do not record duration in the header "
+            f"({fname}); construct a Log to measure it."
+        )
+    return hdr["duration_s"]
+
 
 __version__ = "0.4.1"
 
@@ -70,6 +102,11 @@ __all__ = [
     # batch conversion + channelmap parsing
     "process",
     "read_channelmap",
+    # cheap header read (no full Log)
+    "duration",
+    # modality dispatch helpers
+    "mod_to_attr",
+    "modset_to_strlist",
     # batch EMG/EKG-artifact cleaning (raw .h5 -> *_cleaned.h5 + manifest)
     "clean",
     # signal classes

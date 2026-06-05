@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Public metadata + dispatch helpers.** `delsys.duration(fname)` reads a
+  trial's length in seconds straight from the CSV header (no `Log` construction),
+  raising a clear `ValueError` for EMGworks exports, which don't record duration.
+  `delsys.mod_to_attr` / `delsys.modset_to_strlist` expose the modality-dispatch
+  helpers used to map a modality tag to its `Sensor` attribute. These were
+  previously reached as private `immersionlab.delsys._parse_hdr` /
+  `_mod_to_attr` / `_modset_to_strlist`; the package-extraction shim
+  (`from delsys import *`) only re-exported `__all__`, so those cross-package
+  callers broke — they now have stable public names.
 - **HDF5 native checkpoint.** `delsys.to_native_h5(csv, out_h5)` converts a
   Trigno Discover CSV into a self-contained, native-rate HDF5 checkpoint, and
   `Log(path, target_sr=..., clock_mul=..., t0=...)` reloads it (the constructor

@@ -450,3 +450,51 @@ class EKG(pysampled.Data):
                 a, b = b, a
             out.append([a, b])
         return out
+
+    # ------------------------------------------------------------------
+    # Sidecar convenience (``<stem>.delsys-events`` — the ``rpeaks`` type).
+    # Path defaults to the sibling of ``meta["source"]`` (stamped by
+    # ``Log.ekg`` / ``Log.ekg_raw``). Addressing + I/O live in
+    # :mod:`delsys._rpeaks`.
+    # ------------------------------------------------------------------
+
+    def _events_path(self, path: Optional[str]) -> Optional[str]:
+        if path is not None:
+            return path
+        from delsys import _events
+
+        src = (self.meta or {}).get("source")
+        return _events.events_path_for(src) if src else None
+
+    def load_rpeaks(self, path: Optional[str] = None) -> bool:
+        """Apply a persisted decision + noise from the sidecar to this channel.
+
+        Reproduces the curated peaks on this grid (see
+        :meth:`apply_rpeaks_decision`). Returns ``True`` iff a decision was found
+        and applied; a missing file / no matching entry is a quiet ``False``.
+
+        Args:
+            path: Sidecar path; defaults to the sibling ``<stem>.delsys-events`` of
+                this EKG's ``meta["source"]``.
+        """
+        from delsys import _rpeaks
+
+        p = self._events_path(path)
+        return _rpeaks.apply_sidecar(self, p) if p else False
+
+    def save_rpeaks(self, path: Optional[str] = None) -> str:
+        """Persist this channel's decision + noisy segments to the sidecar.
+
+        Args:
+            path: Sidecar path; defaults to the sibling ``<stem>.delsys-events`` of
+                this EKG's ``meta["source"]``.
+
+        Raises:
+            ValueError: When ``path`` is omitted and no ``meta["source"]`` is set.
+        """
+        from delsys import _rpeaks
+
+        p = self._events_path(path)
+        if not p:
+            raise ValueError("no source path on this EKG; pass path= to save_rpeaks.")
+        return _rpeaks.save_sidecar(self, p)

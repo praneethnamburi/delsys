@@ -453,9 +453,40 @@ class Log:
     emg: Optional[EMG] = property(  # type: ignore[assignment]
         lambda self: _aggregate_bundles([s.emg for s in self.sensors if hasattr(s, "emg")], EMG)
     )
-    ekg: Optional[EKG] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles([s.ekg for s in self.sensors if hasattr(s, "ekg")], EKG)
-    )
+    @property
+    def ekg_raw(self) -> Optional[EKG]:
+        """The aggregate EKG bundle **without** applying a saved rpeak decision.
+
+        Stamps ``meta["source"]`` (this Log's file) so the bundle can find its
+        sibling ``<stem>.delsys-events`` sidecar, but does not read it. Use this
+        for the raw ECG signal (e.g. the cleaner's reference); use :attr:`ekg` to
+        get curated R-peaks.
+        """
+        bundle = _aggregate_bundles([s.ekg for s in self.sensors if hasattr(s, "ekg")], EKG)
+        if bundle is not None:
+            bundle.meta["source"] = self.fname
+        return bundle
+
+    @property
+    def ekg(self) -> Optional[EKG]:
+        """The aggregate EKG bundle, with any saved R-peak curation applied.
+
+        On a single-channel EKG, if a sibling ``<stem>.delsys-events`` carries an
+        ``rpeaks`` decision for this channel, the curated peaks (+ noisy segments)
+        are reproduced on load — so ``lf.ekg.rpeak_times()`` returns the *final*
+        reviewed peaks with no extra step. No sidecar (the common case) is a fast
+        no-op. Use :attr:`ekg_raw` to bypass. A malformed sidecar warns rather than
+        breaking signal access.
+        """
+        bundle = self.ekg_raw
+        if bundle is not None and bundle.n_signals() == 1:
+            try:
+                bundle.load_rpeaks()
+            except Exception as exc:  # never let a bad sidecar break access
+                import warnings
+
+                warnings.warn(f"delsys: could not apply rpeak sidecar for {self.fname}: {exc}")
+        return bundle
     acc: Optional[IMU] = property(  # type: ignore[assignment]
         lambda self: _aggregate_bundles([s.acc for s in self.sensors if hasattr(s, "acc")], IMU)
     )
@@ -883,11 +914,14 @@ class Log:
         through :func:`delsys.cleaning.run_pipeline` directly. Returns
         ``(ekg_1d, ekg_sr)`` — ``(None, None)`` when the Log carries no EKG.
         """
-        if self.ekg is None:
+        # Raw accessor: the cleaner needs the ECG *samples*, not a curated
+        # rpeak decision, and shouldn't pay for auto-load / re-detection.
+        ekg_raw = self.ekg_raw
+        if ekg_raw is None:
             return None, None
-        ekg_arr = np.asarray(self.ekg())
+        ekg_arr = np.asarray(ekg_raw())
         ekg_1d = ekg_arr if ekg_arr.ndim == 1 else ekg_arr[:, 0]
-        return ekg_1d, float(self.ekg.sr)
+        return ekg_1d, float(ekg_raw.sr)
 
     def _acc_by_emg(
         self,

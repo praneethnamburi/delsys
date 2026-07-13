@@ -870,7 +870,7 @@ class Log:
                     f"splice_source={splice_source!r} requested but "
                     f"the corresponding stage didn't run (variant is None)."
                 )
-            self._splice_emg_back(np.asarray(chosen), emg_layout)
+            self._splice_emg_back(np.asarray(chosen), emg_layout, sr=harmonized["sr"])
 
         if generate_report:
             result.generate_report()
@@ -998,6 +998,7 @@ class Log:
         self,
         cleaned_2d: np.ndarray,
         emg_layout: List[Tuple[Sensor, str]],
+        sr: Optional[float] = None,
     ) -> None:
         """Replace EMG sample arrays in ``self.signals`` and rebuild EMG sensors.
 
@@ -1011,13 +1012,27 @@ class Log:
         ``lf.emg`` reflects the cleaning even on very-old pickles where
         per-:class:`Signal` ``meta`` is empty (and the per-Signal splice
         above silently no-ops).
+
+        ``sr`` is the single canonical rate the cleaning ran at (the
+        aggregate ``lf.emg`` rate). The cleaned block is at that rate, so each
+        spliced signal / bundle is stamped with it — dropping any *native*
+        per-channel rate. This matters under a native ``target_sr``: when EMG
+        sensors load at different native rates (e.g. Trigno-base at 1259 Hz +
+        Quattro at 2222 Hz), ``lf.emg`` downsamples to the lowest before
+        cleaning; without re-stamping, the higher-rate channels keep their
+        native ``sr`` on the (now shorter) cleaned block, so re-aggregating
+        ``lf.emg`` collapses them again to a wrong, shorter length. ``_clone``
+        cannot override ``sr`` (it hardcodes ``self.sr``), so we set it after.
         """
         col = 0
         for sensor, mod in emg_layout:
             for subchannel in SUBCHANNEL_MAP[mod]:
                 for i, sig in enumerate(self.signals):
                     if sig.matches(sensor.number, mod, subchannel):
-                        self.signals[i] = sig._clone(cleaned_2d[:, col])
+                        new = sig._clone(cleaned_2d[:, col])
+                        if sr is not None:
+                            new.sr = sr
+                        self.signals[i] = new
                         break
                 col += 1
 
@@ -1038,6 +1053,8 @@ class Log:
             target = sensors_by_number.get(sensor.number)
             if target is not None and hasattr(target, "emg"):
                 target.emg = target.emg._clone(block)
+                if sr is not None:
+                    target.emg.sr = sr
             col += n_subch
 
     # ------------------------------------------------------------------

@@ -257,3 +257,35 @@ No open questions remain — ready to implement on `0.5.0a2` on sign-off.
   channel only, not EMG).
 - Detector-freeze: changing the package default `highpass` does not change a
   curated trial's reproduced `default` set.
+
+## Implementation (2026-07-13, branch `0.5.0a2`)
+
+Shipped across commits (data layer → auto-load → reviewer + docs), green in `b4`:
+
+- `_events.py` — `rpeaks` reserved type (schema 1→2), `read_rpeaks_signals`,
+  excluded from `marker_types`.
+- `ekg.py` — `rpeaks_decision()` / `apply_rpeaks_decision()` (times-based,
+  grid-independent), `load_rpeaks()` / `save_rpeaks()`, `review()`; new
+  `rpeaks_idx_autopruned` meta key so only *human* removals persist.
+- `_rpeaks.py` — addressing + sidecar read/merge/write glue.
+- `log.py` — `Log.ekg` auto-applies a saved decision (warn-guarded);
+  `Log.ekg_raw` bypasses; `_gather_ekg` (cleaner) uses `ekg_raw`.
+- `rpeak_review.py` — the graduated `EKGBrowser` (Flip button + `f` re-detects;
+  add/remove/noise/tag/mode; Save → sidecar; zoom persists).
+- Tests: `test_events.py`, `test_ekg.py`, `test_rpeaks.py`, `test_rpeak_review.py`
+  (dnav-guarded). Tutorial `tutorials/rpeaks_review.md`.
+
+**Two design points settled during build:**
+
+- **Slicing "fix" was unnecessary** — verified `EKG.__init__` already resets the
+  rpeak cache on every construction, so a sliced/cloned EKG re-detects rather than
+  carrying stale parent indices. The `__getitem__` TODO is already closed; no code
+  change.
+- **Only human removals are persisted** — the reproducibility test caught that
+  persisting the detector's own auto-prune would kill a real peak on a grid where
+  the spurious double never appears. Fixed via `rpeaks_idx_autopruned` +
+  per-grid regeneration.
+
+**Needs an interactive smoke test from Praneeth** on a real long EKG trial: the
+reviewer is driven headlessly in tests (construct + actions + save), but live
+mouse/zoom interaction can't be CI-verified.

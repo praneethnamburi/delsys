@@ -498,3 +498,33 @@ class EKG(pysampled.Data):
         if not p:
             raise ValueError("no source path on this EKG; pass path= to save_rpeaks.")
         return _rpeaks.save_sidecar(self, p)
+
+    def review(self, path: Optional[str] = None, figure_handle: Any = None):
+        """Open the interactive R-peak reviewer over this EKG's channel(s).
+
+        Correct auto-detected peaks (add/remove), mark noisy segments, flip
+        polarity (re-detects), and tag — then **Save** to persist the decision to
+        the ``<stem>.delsys-events`` sidecar, from which future loads reproduce
+        the curated peaks (see :meth:`load_rpeaks` and ``Log.ekg`` auto-load).
+        A multi-channel (aggregate) EKG is split and stepped via the dropdown.
+
+        Args:
+            path: Sidecar path; defaults to the sibling ``<stem>.delsys-events`` of
+                this EKG's ``meta["source"]`` (stamped by ``Log.ekg``).
+            figure_handle: Optional matplotlib figure to draw into.
+
+        Returns:
+            The reviewer instance (``datanavigator`` ``PlotBrowser`` subclass).
+
+        Raises:
+            ImportError: If ``datanavigator`` (the optional GUI dependency) is not
+                installed.
+        """
+        from delsys import rpeak_review
+
+        channels = self.split_by_signal_name() if self.n_signals() > 1 else [self]
+        src = (self.meta or {}).get("source")
+        for ch in channels:
+            if src and not (ch.meta or {}).get("source"):
+                ch.meta["source"] = src
+        return rpeak_review.launch(channels, path=path, figure_handle=figure_handle)

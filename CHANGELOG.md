@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`EKG.review()` — interactive R-peak reviewer + persist/reload
+  (`delsys.rpeak_review`).** The curate-and-reload loop that graduates the bespoke
+  `EKGBrowser` from `pn-projects/projects/gibson/gib01.py` into the package. Opens
+  a `datanavigator` `PlotBrowser` (imported lazily) over the EKG's channel(s) —
+  raw trace + default/added/removed peak markers + noisy-segment shading, an
+  inter-beat-interval trace, and an IBI histogram — with:
+  - **a** add a peak at the cursor (snapped by an *edit mode* — `peak` / `valley`
+    / `exact`, cycled by **m**), **d** remove the nearest, **n** mark a noisy
+    segment (two presses), **1**/**2**/**3** tag `reviewed` / `representative` /
+    `interesting`.
+  - a **Flip** button (and **f**) that flips polarity **and re-detects** — the one
+    edit that changes the detector baseline, so do it first, before add/remove.
+  - a **Save** button (and **s**) that writes each channel's decision to the
+    sibling `<stem>.delsys-events` sidecar; the raw/IBI zoom persists across edits.
+  - A multi-channel (aggregate) EKG is split and stepped via the channel dropdown.
+- **Persisted, grid-independent R-peak curation (`rpeaks` type in
+  `<stem>.delsys-events`).** R-peak review is a reproducible *decision*, not a raw
+  annotation, so it lands as a new reserved type in the unified sidecar (peer of
+  `noise`; noisy segments reuse the shared `noise` track). Per channel it records
+  `{detector, added, removed, flipped, tags}` — peak **times, never indices**, so
+  the decision reproduces on any sample grid (native-rate `.h5` reload, a slice).
+  `final_peaks = f(raw_ekg, decision)`.
+  - `EKG.rpeaks_decision()` serializes the current curation; `apply_rpeaks_decision()`
+    reproduces it on this grid by re-running the recorded detector (honouring
+    `flipped`) then applying the human diff (`added` → nearest sample, `removed`
+    → nearest default peak). Only *human* removals are persisted (a new
+    `rpeaks_idx_autopruned` meta key separates the detector's own double-peak
+    prune) — an auto-pruned double sits ~1 beat-width from a real peak, so
+    persisting it would kill that peak on a grid where the double never appears.
+  - `EKG.load_rpeaks()` / `save_rpeaks()` (path defaults to the sibling of
+    `meta["source"]`), `delsys._events.read_rpeaks_signals(path)`, and the
+    addressing + file glue in `delsys._rpeaks`.
+- **`Log.ekg` auto-applies a saved decision; `Log.ekg_raw` bypasses it.** On a
+  single-channel EKG, if a sibling `.delsys-events` carries an `rpeaks` decision
+  for the channel, `lf.ekg.rpeak_times()` returns the *curated final* peaks with
+  no extra step (a malformed sidecar warns rather than breaking signal access; no
+  sidecar is a fast no-op). `lf.ekg_raw` gives the un-curated bundle — the
+  cleaner's ECG reference uses it, so cleaning never pays for auto-load. The bundle
+  carries its source in `meta["source"]`; keyed by stem, a CSV and its native `.h5`
+  share one sidecar.
 - **Public metadata + dispatch helpers.** `delsys.duration(fname)` reads a
   trial's length in seconds straight from the CSV header (no `Log` construction),
   raising a clear `ValueError` for EMGworks exports, which don't record duration.

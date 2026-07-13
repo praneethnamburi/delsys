@@ -27,15 +27,19 @@ Controls (buttons mirror the keys where noted):
 
 | key | button | action |
 |-----|--------|--------|
-| `a` | | add an R-peak at the cursor (snapped per the *edit mode*) |
-| `d` | | remove the R-peak nearest the cursor |
+| `a` | | add an R-peak at the cursor (snapped per the *edit mode*) — or, if you're on a peak you removed, **restore** it |
+| `d` | | remove the R-peak nearest the cursor — or **undo** it if you added it |
 | `n` | | mark a noisy segment — press once for the start, again for the end |
 | `f` | **Flip** | flip polarity **and re-detect** |
 | `m` | **Mode** | cycle the add-snap: `peak` / `valley` / `exact` |
 | `1` `2` `3` | | tag `reviewed` / `representative` / `interesting` |
 | `s` | **Save** | write the decision to the sidecar |
+| `ctrl+k` | **Help** | show the full key-binding cheatsheet |
 
-The raw/IBI zoom persists across edits, so you can work zoomed in.
+`a` and `d` are inverses — re-adding a peak you removed just restores it (no
+duplicate), and removing one you added undoes the addition. The shortcut legend
+is drawn on the figure, and the **Help** button (or `ctrl+k`) shows the full
+list. The raw/IBI zoom persists across edits, so you can work zoomed in.
 
 > **Flip first.** Flipping polarity re-runs detection from scratch, which resets
 > your manual removals. If a lead is inverted, press **Flip** *before* you start

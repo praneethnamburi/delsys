@@ -120,23 +120,43 @@ def _build_rpeak_reviewer_class():
             self.memoryslots.hide()
             self.memoryslots.show = lambda *a, **k: None
 
-            self.add_key_binding("a", self._add_rpeak, description="Add R-peak at cursor")
-            self.add_key_binding("d", self._remove_rpeak, description="Remove nearest R-peak")
-            self.add_key_binding("n", self._mark_noise, description="Noisy segment (2 presses)")
-            self.add_key_binding("f", self._flip, description="Flip polarity + re-detect")
-            self.add_key_binding("m", self._cycle_mode, description="Cycle add mode")
-            self.add_key_binding("s", self.save, description="Save decision to sidecar")
+            edit = "R-peak editing"
+            self.add_key_binding(
+                "a", self._add_rpeak,
+                description="Add peak at cursor (or restore a removed one)", group=edit,
+            )
+            self.add_key_binding(
+                "d", self._remove_rpeak,
+                description="Remove nearest peak (or undo an added one)", group=edit,
+            )
+            self.add_key_binding(
+                "n", self._mark_noise, description="Mark noisy segment (two presses)", group=edit
+            )
+            self.add_key_binding(
+                "f", self._flip, description="Flip polarity + re-detect", group=edit
+            )
+            self.add_key_binding(
+                "m", self._cycle_mode, description="Cycle add mode (peak/valley/exact)", group=edit
+            )
             for key, tag in _TAG_KEYS.items():
                 self.add_key_binding(
-                    key, (lambda e=None, t=tag: self._tag(t)), description=f"tag {tag}"
+                    key, (lambda e=None, t=tag: self._tag(t)), description=f"Tag {tag}", group="Tags"
                 )
+            self.add_key_binding(
+                "s", self.save, description="Save decision to sidecar", group="File"
+            )
 
             self.buttons.add(text="Flip (f)", type_="Push", action_func=self._flip)
             self.buttons.add(text="Save (s)", type_="Push", action_func=self.save)
             self.buttons.add(text="Mode (m)", type_="Push", action_func=self._cycle_mode)
+            self.buttons.add(text="Help (ctrl+k)", type_="Push", action_func=self._help)
             self._mode_var = self.statevariables.add(
                 "edit mode", ["peak", "valley", "exact"], widget="dropdown"
             )
+
+        def _help(self, event=None) -> None:
+            """Open datanavigator's grouped key-binding cheatsheet (Help / ctrl+k)."""
+            self.show_key_bindings()
 
         # -- actions -------------------------------------------------------
 
@@ -144,7 +164,20 @@ def _build_rpeak_reviewer_class():
             if event is None or event.xdata is None:
                 return
             ch = self._cur()
-            i_marked = int(np.argmin(np.abs(ch.t - float(event.xdata))))
+            t = float(event.xdata)
+            # If a currently-*removed* peak sits near the cursor, restore it (drop
+            # it from the removed set) rather than adding a near-duplicate. Add is
+            # the inverse of remove: re-adding what you removed should undo it.
+            removed = list(ch.meta.get("rpeaks_idx_removed", []))
+            if removed:
+                rt = np.asarray(ch.t[np.array(removed, dtype=int)], dtype=float)
+                j = int(np.argmin(np.abs(rt - t)))
+                if abs(float(rt[j]) - t) <= self._win_remove[1]:
+                    ch.meta["rpeaks_idx_removed"] = [r for k, r in enumerate(removed) if k != j]
+                    print(f"  restored peak @ {float(rt[j]):.3f}s")
+                    self.update()
+                    return
+            i_marked = int(np.argmin(np.abs(ch.t - t)))
             lo = max(i_marked + round(self._win_add[0] * ch.sr), 0)
             hi = min(i_marked + round(self._win_add[1] * ch.sr) + 1, len(ch))
             seg = np.asarray(ch())[lo:hi].reshape(-1)
@@ -165,21 +198,26 @@ def _build_rpeak_reviewer_class():
                 return
             ch = self._cur()
             t_marked = float(event.xdata)
-            idx = np.array(
-                list(ch.meta.get("rpeaks_idx_default", []))
-                + list(ch.meta.get("rpeaks_idx_added", [])),
-                dtype=int,
-            )
+            added = list(ch.meta.get("rpeaks_idx_added", []))
+            default = list(ch.meta.get("rpeaks_idx_default", []))
+            # Added first so a manual addition wins a tie and gets *undone* rather
+            # than shadowed by a stale entry in both added and removed.
+            idx = np.array(added + default, dtype=int)
             if idx.size == 0:
                 return
             t_idx = np.asarray(ch.t[idx], dtype=float)
             nearest = int(idx[int(np.argmin(np.abs(t_idx - t_marked)))])
-            if self._win_remove[0] < (t_marked - float(ch.t[nearest])) < self._win_remove[1]:
+            if not (self._win_remove[0] < (t_marked - float(ch.t[nearest])) < self._win_remove[1]):
+                return
+            if nearest in added:
+                ch.meta["rpeaks_idx_added"] = [a for a in added if a != nearest]
+                print(f"  undo added peak @ {float(ch.t[nearest]):.3f}s")
+            else:
                 ch.meta.setdefault("rpeaks_idx_removed", [])
                 if nearest not in ch.meta["rpeaks_idx_removed"]:
                     ch.meta["rpeaks_idx_removed"].append(nearest)
                 print(f"  - peak @ {float(ch.t[nearest]):.3f}s")
-                self.update()
+            self.update()
 
         def _mark_noise(self, event=None) -> None:
             if event is None or event.xdata is None:
@@ -262,6 +300,13 @@ def _build_rpeak_reviewer_class():
                 f"flipped={bool(ch.meta.get('is_flipped', False))}   |   "
                 f"tags={','.join(tags) if tags else '-'}",
                 fontsize=10,
+            )
+            # Persistent on-figure shortcut legend (the command-line hint stays too).
+            figure.text(
+                0.008, 0.004,
+                "a add  ·  d remove  ·  n noise(2 presses)  ·  f flip+redetect  ·  "
+                "m mode  ·  1/2/3 tag  ·  s save        Help button / ctrl+k = full list",
+                fontsize=7.5, family="monospace", color="0.4", va="bottom",
             )
 
         def update(self, event=None) -> None:

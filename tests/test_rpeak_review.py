@@ -121,3 +121,48 @@ def test_review_multichannel_steps_channels(tmp_path):
     agg.meta["source"] = str(tmp_path / "Trial_2.h5")
     r = agg.review()
     assert len(r._channels) == 2
+
+
+def test_review_add_near_removed_restores_it(tmp_path):
+    """Adding at a removed peak's location restores it (drops from removed) rather
+    than creating a duplicate in added. Robust to the detector's own auto-prune,
+    which pre-populates removed."""
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    r = ekg.review()
+    ch = r._cur()
+    removed0 = list(ch.meta["rpeaks_idx_removed"])  # baseline auto-prune
+    i10 = int(ch.meta["rpeaks_idx_default"][10])
+    t10 = float(ch.t[i10])
+    r._remove_rpeak(_Ev(t10))
+    assert i10 in ch.meta["rpeaks_idx_removed"]     # human removal recorded
+    r._add_rpeak(_Ev(t10))
+    assert i10 not in ch.meta["rpeaks_idx_removed"]  # restored, not shadowed
+    assert ch.meta["rpeaks_idx_removed"] == removed0  # back to baseline
+    assert ch.meta["rpeaks_idx_added"] == []          # no duplicate
+
+
+def test_review_remove_added_undoes_it(tmp_path):
+    """Removing a peak you added undoes the addition (drops from added) rather than
+    pushing it into removed."""
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    r = ekg.review()
+    ch = r._cur()
+    removed0 = list(ch.meta["rpeaks_idx_removed"])
+    mid_t = float((ch.t[ch.meta["rpeaks_idx_default"][5]] + ch.t[ch.meta["rpeaks_idx_default"][6]]) / 2)
+    r._add_rpeak(_Ev(mid_t))
+    assert len(ch.meta["rpeaks_idx_added"]) == 1
+    added_idx = int(ch.meta["rpeaks_idx_added"][0])
+    r._remove_rpeak(_Ev(float(ch.t[added_idx])))
+    assert ch.meta["rpeaks_idx_added"] == []            # undone
+    assert added_idx not in ch.meta["rpeaks_idx_removed"]  # not pushed to removed
+    assert ch.meta["rpeaks_idx_removed"] == removed0       # removed unchanged
+
+
+def test_review_has_help_button(tmp_path):
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    r = ekg.review()
+    assert "Help (ctrl+k)" in r.buttons
+    assert callable(getattr(r, "show_key_bindings", None))

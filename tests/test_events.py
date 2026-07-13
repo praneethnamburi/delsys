@@ -262,3 +262,59 @@ def test_apply_events_noise_empty_when_no_noise_type(fixtures_dir, tmp_path):
     events_p = tmp_path / ("Trial_5" + _events.EVENTS_SUFFIX)
     _events.write_events(str(events_p), {"1": {"size": 1, "signals": {"3.EMGS | T": [[1.4]]}}})
     assert _events.apply_events_noise(lf, str(events_p)) == 0
+
+
+# ---------------------------------------------------------------------------
+# rpeaks type (EKG review decision)
+# ---------------------------------------------------------------------------
+
+
+def test_rpeaks_roundtrip_and_reserved_from_markers(tmp_path):
+    """The ``rpeaks`` type round-trips its decision fields, sorts ``added``,
+    drops trivial entries, and never leaks into ``marker_types``."""
+    p = str(tmp_path / ("Trial_1" + _events.EVENTS_SUFFIX))
+    _events.write_events(
+        p,
+        {
+            "noise": {"signals": {"5.EKG.A | Chest": {"windows": [[12.1, 12.4]]}}},
+            "1": {"size": 1, "signals": {"5.EKG.A | Chest": [[1.4]]}},
+            "rpeaks": {
+                "signals": {
+                    "5.EKG.A | Chest": {
+                        "detector": {"name": "pn", "highpass": 5.0, "hr_max": 200.0},
+                        "added": [2.101, 1.402],  # unsorted
+                        "removed": [3.55],
+                        "flipped": True,
+                        "tags": ["reviewed"],
+                    },
+                    # accepted-as-is, no marks/tags -> dropped on write
+                    "6.EKG.A | Neck": {"detector": {"name": "pn"}},
+                }
+            },
+        },
+    )
+    rp = _events.read_rpeaks_signals(p)
+    assert set(rp) == {"5.EKG.A | Chest"}  # trivial entry dropped
+    chest = rp["5.EKG.A | Chest"]
+    assert chest["added"] == [1.402, 2.101]  # sorted
+    assert chest["removed"] == [3.55]
+    assert chest["flipped"] is True
+    assert chest["tags"] == ["reviewed"]
+    assert chest["detector"] == {"name": "pn", "highpass": 5.0, "hr_max": 200.0}
+    # rpeaks is reserved: not a marker type; noise + markers still round-trip.
+    assert _events.marker_types(p) == ["1"]
+    assert _events.read_noise_signals(p) == {"5.EKG.A | Chest": {"windows": [[12.1, 12.4]]}}
+
+
+def test_rpeaks_absent_returns_empty(tmp_path):
+    p = str(tmp_path / ("Trial_2" + _events.EVENTS_SUFFIX))
+    _events.write_events(p, {"noise": {"signals": {"5.EKG.A | Chest": [[1.0, 2.0]]}}})
+    assert _events.read_rpeaks_signals(p) == {}
+
+
+def test_events_schema_is_2(tmp_path):
+    import json
+
+    p = str(tmp_path / ("Trial_3" + _events.EVENTS_SUFFIX))
+    _events.write_events(p, {"rpeaks": {"signals": {"5.EKG.A | C": {"added": [1.0]}}}})
+    assert json.load(open(p))["schema"] == 2

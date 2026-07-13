@@ -50,11 +50,18 @@ from delsys import _noise
 #: Composite suffix of the unified per-log annotation sidecar.
 EVENTS_SUFFIX = ".delsys-events"
 
-#: Bump when the unified layout changes incompatibly.
-EVENTS_SCHEMA = 1
+#: Bump when the unified layout changes incompatibly. Schema 2 adds the
+#: ``"rpeaks"`` type (an older reader would misread its per-signal dict as a
+#: marker track — see :func:`marker_types`).
+EVENTS_SCHEMA = 2
 
 #: The built-in quality track name.
 NOISE_TYPE = "noise"
+
+#: The EKG R-peak review-decision track name. A reserved type (neither ``noise``
+#: nor a marker) whose per-signal value is a curation *decision* — see
+#: :func:`read_rpeaks_signals`.
+RPEAKS_TYPE = "rpeaks"
 
 
 def events_path_for(target: Union[str, "os.PathLike"]) -> str:
@@ -104,6 +111,14 @@ def write_events(path: str, events: Dict[str, dict]) -> str:
             signals = {k: v for k, v in signals.items() if v}
             if signals:
                 body[name] = {"kind": "noise", "signals": signals}
+        elif name == RPEAKS_TYPE:
+            signals = {
+                k: _canonical_rpeaks_value(v)
+                for k, v in (section.get("signals") or {}).items()
+            }
+            signals = {k: v for k, v in signals.items() if v}
+            if signals:
+                body[name] = {"kind": "rpeaks", "signals": signals}
         else:
             signals = _clean_marker_signals(section.get("signals") or {})
             if signals:
@@ -196,9 +211,107 @@ def read_noise_signals(path: str) -> Dict[str, dict]:
 
 
 def marker_types(path: str) -> List[str]:
-    """Names of the marker (non-noise) event types present in the doc, sorted."""
+    """Names of the marker event types present in the doc, sorted.
+
+    Excludes the two reserved non-marker tracks (``noise`` and ``rpeaks``), whose
+    per-signal values are not marker records.
+    """
     events = read_events(path).get("events", {})
-    return sorted(name for name in events if name != NOISE_TYPE)
+    return sorted(name for name in events if name not in (NOISE_TYPE, RPEAKS_TYPE))
+
+
+# ---------------------------------------------------------------------------
+# R-peak review-decision track (``"rpeaks"``)
+# ---------------------------------------------------------------------------
+#
+# Per-signal value is a *decision* (not marker records):
+#
+#     {"detector": {"name": "pn", "highpass": 5.0, "hr_max": 200.0},
+#      "added":   [1.402, 2.101],   # peak times (s) merged into the result
+#      "removed": [3.550],          # detector-default peak times suppressed
+#      "flipped": false,            # polarity flip re-runs detection on load
+#      "tags":    ["reviewed"]}     # free-text review tags
+#
+# Times, never indices — so the decision reproduces on any sample grid (native-
+# rate ``.h5`` reload, a slice). ``final_peaks = f(raw_ekg, this_decision)``.
+
+
+def _as_time_list(seq) -> List[float]:
+    """Coerce a sequence of peak times to a sorted, de-duplicated float list."""
+    out = []
+    for t in seq or []:
+        try:
+            out.append(float(t))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(out))
+
+
+def _canonical_detector(det) -> dict:
+    """Normalize a detector-provenance block, keeping ``name`` + numeric params."""
+    if not isinstance(det, dict):
+        return {}
+    out: dict = {"name": str(det.get("name", "pn"))}
+    for k in ("highpass", "hr_max"):
+        if det.get(k) is not None:
+            out[k] = float(det[k])
+    return out
+
+
+def _canonical_rpeaks_value(val) -> dict:
+    """On-disk form of one channel's rpeak decision, dropping trivial entries.
+
+    An entry is kept only if it carries a real curation (added/removed peaks, a
+    polarity flip, or tags) — accepting the auto-detection verbatim with no tag is
+    not worth persisting. The ``detector`` provenance rides along on kept entries
+    (it makes ``removed`` and ``flipped`` reproducible on reload).
+    """
+    if not isinstance(val, dict):
+        return {}
+    added = _as_time_list(val.get("added"))
+    removed = _as_time_list(val.get("removed"))
+    flipped = bool(val.get("flipped", False))
+    tags = [str(t) for t in (val.get("tags") or [])]
+    out: dict = {}
+    if added:
+        out["added"] = added
+    if removed:
+        out["removed"] = removed
+    if flipped:
+        out["flipped"] = True
+    if tags:
+        out["tags"] = tags
+    if out:
+        out["detector"] = _canonical_detector(val.get("detector") or {})
+    return out
+
+
+def _read_rpeaks_value(val) -> dict:
+    """Read one channel's decision into a fully-defaulted dict (all keys present)."""
+    val = val if isinstance(val, dict) else {}
+    return {
+        "detector": _canonical_detector(val.get("detector") or {}) or {"name": "pn"},
+        "added": _as_time_list(val.get("added")),
+        "removed": _as_time_list(val.get("removed")),
+        "flipped": bool(val.get("flipped", False)),
+        "tags": [str(t) for t in (val.get("tags") or [])],
+    }
+
+
+def read_rpeaks_signals(path: str) -> Dict[str, dict]:
+    """Per-signal R-peak decisions from the unified doc's ``"rpeaks"`` type.
+
+    Returns ``{address-key: {"detector", "added", "removed", "flipped", "tags"}}``
+    (all keys present, defaulted), or an empty dict when the file or the rpeaks
+    type is absent.
+    """
+    section = read_events(path).get("events", {}).get(RPEAKS_TYPE)
+    if not section:
+        return {}
+    return {
+        key: _read_rpeaks_value(val)
+        for key, val in (section.get("signals") or {}).items()
+    }
 
 
 def read_marker_records(path: str, event_type: str) -> Dict[str, List[dict]]:

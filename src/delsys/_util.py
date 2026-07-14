@@ -5,7 +5,6 @@ import warnings
 from collections import defaultdict
 from typing import TYPE_CHECKING, List, Optional, Set, Type
 
-import numpy as np
 import pysampled
 
 from delsys._constants import _SUBCHANNEL_KEYS
@@ -282,9 +281,10 @@ def _aggregate_bundles(
     Raises:
         ValueError: On ``signal_coords``, ``axis``, or ``t0`` mismatch.
 
-    .. todo:: Migrate to ``pysampled.Data.merge_along_signal_name`` once
-        pysampled ships those classmethods (deferred from pysampled
-        1.2.0).
+    .. note:: The stack + validate + label + construct step is delegated to
+        ``pysampled.Data.merge_along_signal_name`` (pysampled >= 1.3.0); this
+        function keeps only delsys's rate-reconciliation policy, the
+        tail-trim defense, and the plural-``sensors`` meta convention.
     """
     if not parts:
         return None
@@ -292,22 +292,12 @@ def _aggregate_bundles(
     if bundle_cls is None:
         bundle_cls = type(parts[0])
 
-    axes = {p.axis for p in parts}
-    if len(axes) > 1:
-        raise ValueError(f"Cannot aggregate parts with mixed axis values: {axes}")
-    axis = parts[0].axis
-
-    coord_signatures = {tuple(p.signal_coords) for p in parts}
-    if len(coord_signatures) > 1:
-        raise ValueError(
-            f"Cannot aggregate parts with mismatched signal_coords: {coord_signatures}"
-        )
-    signal_coords = list(parts[0].signal_coords)
-
-    # Multi-rate: downsample higher-rate parts to the lowest sr present.
+    # delsys rate policy: downsample any multi-rate parts to the lowest sr
+    # present (with a warning). pysampled's merge requires same-rate parts;
+    # reconciling rates is delsys's concern, not the foundation's.
     srs = sorted({p.sr for p in parts})
+    target_sr = srs[0]
     if len(srs) > 1:
-        target_sr = srs[0]
         higher = [p for p in parts if p.sr != target_sr]
         higher_locations = [
             getattr(p.meta.get("sensor", None), "location", None) or "?"
@@ -320,52 +310,25 @@ def _aggregate_bundles(
             stacklevel=2,
         )
         parts = [p if p.sr == target_sr else p.resample(target_sr) for p in parts]
-    else:
-        target_sr = srs[0]
-
-    # Validate t0 agreement (post-resample, since resample may shift t0).
-    tol = 1.0 / target_sr
-    t0 = parts[0]._t0
-    for p in parts[1:]:
-        if abs(p._t0 - t0) > tol:
-            raise ValueError(
-                f"Cannot aggregate parts with mismatched t0: {t0} vs {p._t0} "
-                f"(tolerance {tol})"
-            )
 
     # Defense in depth: post-resample lengths should already match given
-    # parse-time normalization, but if they don't, tail-trim every part to
-    # the shortest length so np.hstack can run.
-    lens = [p().shape[0] if p().ndim > 1 else p().shape[0] for p in parts]
+    # parse-time normalization, but if float-resample drift leaves them off,
+    # tail-trim to the shortest so the merge's exact-length check doesn't trip.
+    lens = [p().shape[0] for p in parts]
     min_len = min(lens)
     if max(lens) != min_len:
         parts = [
             p if p().shape[0] == min_len else p._clone(p()[:min_len]) for p in parts
         ]
 
-    # Stack name-major. Each bundle's column layout is already
-    # ``itertools.product(signal_names, signal_coords)`` per pysampled's
-    # invariant, so concatenating preserves that as long as names don't
-    # collide across parts (which they won't — each comes from a distinct
-    # sensor location).
-    arrays = [
-        p() if p().ndim == 2 else np.atleast_2d(p()).T for p in parts
-    ]
-    stacked = np.hstack(arrays)
-
-    signal_names: List[str] = []
+    # Plural-``sensors`` meta (delsys convention), aligned with signal_names.
     sensors_meta: List = []
     for p in parts:
-        signal_names.extend(p.signal_names)
         sensors_meta.extend(_sensors_aligned_with_names(p))
 
-    meta = {"sensors": sensors_meta}
-    return bundle_cls(
-        stacked,
-        sr=target_sr,
-        axis=axis,
-        t0=t0,
-        meta=meta,
-        signal_names=signal_names,
-        signal_coords=signal_coords,
-    )
+    # Stack + validate (axis / signal_coords / t0-within-tolerance / length) +
+    # label + construct: delegate to pysampled's merge (1.3.0). The ``meta=``
+    # override supplies delsys's plural-sensors reduction (and bypasses merge's
+    # default keep-agreeing/drop-conflicting warning on the per-part ``sensor``
+    # key). A single part is a label-preserved clone, as before.
+    return bundle_cls.merge_along_signal_name(parts, meta={"sensors": sensors_meta})

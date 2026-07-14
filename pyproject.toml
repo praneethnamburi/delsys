@@ -28,7 +28,7 @@ dependencies = [
     "scikit-learn",
     "heartpy",
     "neurokit2",
-    "pysampled>=1.2.0",
+    "pysampled>=1.3.0",
     "h5py",
     "tqdm",
     "tomlkit",

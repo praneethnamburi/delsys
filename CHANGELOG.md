@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-14
+## [0.5.1] - 2026-07-14
+
+### Changed
+
+- **`_aggregate_bundles` (behind `lf.emg` / `lf.ekg` / `lf.acc` / …) now
+  delegates its stack + validate + label + construct step to
+  `pysampled.Data.merge_along_signal_name`** (new in pysampled 1.3.0). delsys
+  keeps only what's genuinely its own: the multi-rate rate-reconciliation policy
+  (downsample to the lowest present rate with a `UserWarning`), the tail-trim
+  length defense, and the plural-`sensors` meta convention (passed as
+  `merge(..., meta={"sensors": ...})`, which also bypasses merge's default
+  meta-drop warning on the per-part `sensor` key). Behavior is unchanged —
+  verified bitwise against the pre-refactor aggregate on real multi-sensor
+  Discover data (12 same-rate EMG channels + the multi-rate mix). Pins
+  `pysampled>=1.3.0`.
 
 ### Added
 

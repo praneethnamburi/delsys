@@ -92,7 +92,7 @@ def duration(fname: str) -> float:
     return hdr["duration_s"]
 
 
-__version__ = "0.5.1"
+__version__ = "0.5.2.dev0"
 
 __all__ = [
     # primary entry point

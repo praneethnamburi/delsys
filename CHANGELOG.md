@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-14
+
 ### Added
 
 - **`EKG.review()` — interactive R-peak reviewer + persist/reload
@@ -280,6 +282,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Default `TARGET_SR` is now native (preserve acquisition rate) for
+  Trigno-base modalities** (EMGS / EMGD / EMGQ / ACC / GYRO / FSR / EKG / Analog).
+  A bare `delsys.Log(csv)` (or `Log(h5)`) no longer resamples these — it returns
+  each modality at its native acquisition rate, with no anti-alias filter
+  (previously it resampled to fixed rates, e.g. Analog→2400 Hz, EMG→1920 Hz).
+  **This is a behavior change**: downstream code that relied on the old uniform
+  rates should pass an explicit `target_sr=` to restore per-modality resampling.
+  Motivation: native rate preserves event timing that resample-on-load smears
+  (e.g. an analog gate's rising edge). Link devices (VO2 / HR / SmO2 / Thb) are
+  asynchronous and stay resampled. A consequence is that `lf.emg` can now span
+  multiple native rates across sensors (e.g. Trigno-base at 1259 Hz + Quattro at
+  2222 Hz); `lf.<modality>` downsamples to the lowest present rate with a
+  `UserWarning`, and `Log.clean_emg_ekg_artifact` harmonizes to one rate and
+  commits the cleaned EMG at that rate.
 - **Bundle `signal_names` keep the full body-location name.** `_trim_location`
   now keeps everything *before* the `(...)` parenthetical (dropping only the
   parenthetical — the FSR/Quattro position map or an EMG alt-name) instead of

@@ -9,6 +9,7 @@
 
 workflow
 cleaning_emg_ekg_artifact
+rpeaks_review
 ```
 
 ```{toctree}

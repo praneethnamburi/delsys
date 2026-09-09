@@ -396,7 +396,6 @@ class EKG(pysampled.Data):
             ValueError: On an unrecognized detector name.
         """
         self._require_single_channel("apply_rpeaks_decision")
-        self._warn_frame_mismatch(decision.get("frame"))
         det = decision.get("detector") or {}
         name = det.get("name", "pn")
         if name != "pn":
@@ -407,6 +406,12 @@ class EKG(pysampled.Data):
             highpass=det.get("highpass", 5.0),
             hr_max=det.get("hr_max", 200.0),
         )
+        if self._frame_mismatch(decision.get("frame")):
+            # SKIP the human diff rather than apply it to the wrong beats. A shifted origin does
+            # not merely drop labels -- each surviving one snaps to whatever beat happens to lie
+            # within tolerance, so applying it silently MIS-ATTRIBUTES curation. Auto-detection
+            # alone is strictly better than curation attached to the wrong beats.
+            return self._get_rpeaks_from_meta()
         self.meta["rpeaks_idx_added"] = self._times_to_sample_idx(decision.get("added", []))
         # snapped to the FINAL peak set (an added peak can itself be the ectopic one)
         self.meta["rpeaks_idx_ectopic"] = self._times_to_final_peak_idx(decision.get("ectopic", []))
@@ -452,8 +457,8 @@ class EKG(pysampled.Data):
                 out.append(int(default[j]))
         return sorted(set(out))
 
-    def _warn_frame_mismatch(self, frame, tol: float = 1e-3) -> None:
-        """Warn when a decision was written on a different time ORIGIN than this load.
+    def _frame_mismatch(self, frame, tol: float = 1e-3) -> bool:
+        """True (and warns) when a decision was written on a different time ORIGIN than this load.
 
         Only the origin is checked, not the rate: a decision is meant to reproduce across sample
         grids (a native-rate reload, a resample), and those legitimately change ``sr``. What it
@@ -463,17 +468,20 @@ class EKG(pysampled.Data):
         an annotated file with the wrong ``t0`` drops the human's peaks one by one with no message
         -- the worst possible failure for hand-curated data."""
         if not isinstance(frame, dict) or "t0" not in frame:
-            return                                   # pre-stamp sidecar; nothing to check
+            return False                             # pre-stamp sidecar; nothing to check
         import warnings as _w
         t0_now, t0_was = float(self.t[0]), float(frame["t0"])
-        if abs(t0_now - t0_was) > tol:
-            _w.warn(
-                f"delsys: this R-peak decision was written with the signal starting at "
-                f"t0={t0_was:.4f}s, but this EKG starts at t0={t0_now:.4f}s. Peak times are stored "
-                "on the loaded clock, so they will not resolve and the curation WILL be silently "
-                "lost. Reload with the same clock_mul / t0 it was reviewed with.",
-                stacklevel=2,
-            )
+        if abs(t0_now - t0_was) <= tol:
+            return False
+        _w.warn(
+            f"delsys: this R-peak decision was written with the signal starting at "
+            f"t0={t0_was:.4f}s, but this EKG starts at t0={t0_now:.4f}s. Peak times are stored on "
+            "the loaded clock, so under a shifted origin they attach to the WRONG beats. The "
+            "curation has been SKIPPED -- you are seeing auto-detection only. Reload with the "
+            f"clock it was reviewed with (t0={t0_was:.4f}).",
+            stacklevel=2,
+        )
+        return True
 
     def _times_to_final_peak_idx(self, times: List[float], tol: float = 0.1) -> List[int]:
         """Nearest **final** peak index for each time, within ``tol`` s.

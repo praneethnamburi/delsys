@@ -245,9 +245,23 @@ def _build_rpeak_reviewer_class():
             self.update()
 
         def _cycle_mode(self, event=None) -> None:
+            """Cycle the add-snap mode AND show it.
+
+            ``StateVariable.cycle()`` only moves the index and fires its change callbacks -- it
+            does not repaint the sidebar widget -- so without the explicit ``update_display`` the
+            dropdown kept showing the previous mode and the key press looked like a no-op. The
+            console line is the belt to that braces: the mode governs where ``a`` places a peak,
+            so silent cycling is the one failure a reviewer cannot see coming.
+            """
             var = getattr(self, "_mode_var", None)
-            if var is not None:
-                var.cycle()
+            if var is None:
+                return
+            var.cycle()
+            try:
+                self.statevariables.update_display()
+            except Exception:                       # TextView fallback / no widget mounted yet
+                pass
+            print(f"  edit mode: {var.current_state}")
 
         def _tag(self, tag: str) -> None:
             ch = self._cur()

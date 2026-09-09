@@ -355,6 +355,11 @@ class EKG(pysampled.Data):
         )
         return {
             "detector": dict(det),
+            # The time FRAME the decision was written in. Peak times are only portable across
+            # loads that share an origin: reload the same file with a different t0/clock_mul and
+            # every added/removed/ectopic time misses its peak, silently. Stamping the frame lets
+            # apply_rpeaks_decision say so out loud instead.
+            "frame": {"t0": float(t[0])},
             "added": [float(t[i]) for i in self.meta.get("rpeaks_idx_added", [])],
             "removed": [float(t[i]) for i in human_removed],
             "ectopic": [float(t[i]) for i in self.meta.get("rpeaks_idx_ectopic", [])],
@@ -391,6 +396,7 @@ class EKG(pysampled.Data):
             ValueError: On an unrecognized detector name.
         """
         self._require_single_channel("apply_rpeaks_decision")
+        self._warn_frame_mismatch(decision.get("frame"))
         det = decision.get("detector") or {}
         name = det.get("name", "pn")
         if name != "pn":
@@ -446,6 +452,29 @@ class EKG(pysampled.Data):
                 out.append(int(default[j]))
         return sorted(set(out))
 
+    def _warn_frame_mismatch(self, frame, tol: float = 1e-3) -> None:
+        """Warn when a decision was written on a different time ORIGIN than this load.
+
+        Only the origin is checked, not the rate: a decision is meant to reproduce across sample
+        grids (a native-rate reload, a resample), and those legitimately change ``sr``. What it
+        cannot survive is a shifted origin.
+
+        Peak times reproduce across sample *grids* but not across *origins*. Without this, loading
+        an annotated file with the wrong ``t0`` drops the human's peaks one by one with no message
+        -- the worst possible failure for hand-curated data."""
+        if not isinstance(frame, dict) or "t0" not in frame:
+            return                                   # pre-stamp sidecar; nothing to check
+        import warnings as _w
+        t0_now, t0_was = float(self.t[0]), float(frame["t0"])
+        if abs(t0_now - t0_was) > tol:
+            _w.warn(
+                f"delsys: this R-peak decision was written with the signal starting at "
+                f"t0={t0_was:.4f}s, but this EKG starts at t0={t0_now:.4f}s. Peak times are stored "
+                "on the loaded clock, so they will not resolve and the curation WILL be silently "
+                "lost. Reload with the same clock_mul / t0 it was reviewed with.",
+                stacklevel=2,
+            )
+
     def _times_to_final_peak_idx(self, times: List[float], tol: float = 0.1) -> List[int]:
         """Nearest **final** peak index for each time, within ``tol`` s.
 
@@ -469,19 +498,27 @@ class EKG(pysampled.Data):
         idx = np.array(sorted(self.meta.get("rpeaks_idx_ectopic", [])), dtype=int)
         return np.asarray(self.t)[idx] if idx.size else np.empty(0)
 
-    def detect_ectopics(self, short: float = 0.85, tol: float = 0.20, local: int = 5) -> List[int]:
-        """Seed ectopic labels automatically; returns the labelled peak indices.
+    def detect_ectopics(self, short: float = 0.85, tol: float = 0.20, local: int = 5,
+                        replace: bool = True) -> List[int]:
+        """(Re-)seed ectopic labels automatically; returns the labelled peak indices.
 
         The classic premature-beat signature: an interval markedly **shorter** than its local
         median, followed by a **compensatory pause**, such that the pair sums to about two normal
-        intervals. Candidates are *added to* ``rpeaks_idx_ectopic`` -- the human confirms or clears
-        them, so the detector proposes and never overrules.
+        intervals.
+
+        ``replace=True`` (the default) **clears the existing labels first**, so the result depends
+        only on the signal and not on how many times you pressed the button -- run it twice and you
+        get the same answer. That also means it discards manual confirmations, which is the point
+        of a reset; use ``replace=False`` to union candidates onto what is already there.
 
         Args:
             short: an interval below this fraction of the local median is "premature".
             tol: allowed deviation of the short+long pair from two local medians.
             local: half-width (beats) of the local median.
+            replace: clear existing labels before detecting (idempotent reset).
         """
+        if replace:
+            self.meta["rpeaks_idx_ectopic"] = []
         peaks = np.array(self._get_rpeaks_from_meta(), dtype=int)
         if peaks.size < 2 * local + 3:
             return list(self.meta.get("rpeaks_idx_ectopic", []))

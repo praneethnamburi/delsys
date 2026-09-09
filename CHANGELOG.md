@@ -22,7 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interval + compensatory pause) for a human to confirm or clear.
   Distinct from a noisy segment on purpose: noise is an *interval* where we cannot know
   what the heart did (exclude), an ectopic is a *beat* we know exactly (exclude **or**
-  correct, and count as a burden).
+  correct, and count as a burden). `ctrl+e` / the button **clears every label and
+  re-detects** — a reset, so the result depends on the signal and not on press history.
+- **Time-frame stamp on the R-peak decision (`"frame": {"t0": ...}`), with a warning on
+  mismatch.** Peak times reproduce across sample *grids* but not across *origins*: reload
+  an annotated file with a different `t0` and every added / removed / ectopic time misses
+  its peak, dropping hand curation with no message. The decision now records the origin it
+  was written on and `apply_rpeaks_decision` warns when it does not match. Pre-existing
+  sidecars carry no stamp and are simply not checked.
 
 ### Fixed
 

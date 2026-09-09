@@ -287,6 +287,9 @@ def _canonical_rpeaks_value(val) -> dict:
         out["tags"] = tags
     if out:
         out["detector"] = _canonical_detector(val.get("detector") or {})
+        fr = val.get("frame")
+        if isinstance(fr, dict):                 # the clock the peak times are expressed on
+            out["frame"] = {"t0": float(fr.get("t0", 0.0))}
     return out
 
 
@@ -298,6 +301,7 @@ def _read_rpeaks_value(val) -> dict:
         "added": _as_time_list(val.get("added")),
         "removed": _as_time_list(val.get("removed")),
         "ectopic": _as_time_list(val.get("ectopic")),
+        "frame": (val.get("frame") if isinstance(val.get("frame"), dict) else None),
         "flipped": bool(val.get("flipped", False)),
         "tags": [str(t) for t in (val.get("tags") or [])],
     }

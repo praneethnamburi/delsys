@@ -26,8 +26,11 @@ Controls (keys mirrored by buttons where noted):
   and downstream excludes or interpolates the two intervals it corrupts, and
   can count ectopic burden. Use this rather than **d** — deleting the peak
   leaves one long interval spanning the beat, which is worse.
-- **Detect ectopics** button — seeds candidates from the premature-beat
-  signature (short interval + compensatory pause); confirm or clear with **e**.
+- **ctrl+e** / **Detect ectopics** button — clear every ectopic label and
+  re-run detection from the premature-beat signature (short interval +
+  compensatory pause); then confirm or clear individually with **e**. It is a
+  *reset*, so running it twice gives the same answer — and it discards manual
+  labels, which is what makes it idempotent.
 - **f** / **Flip** button — flip polarity **and re-detect** (the one edit that
   changes the detector baseline, not just the human diff).
 - **m** / **Mode** — cycle the add snap: ``peak`` / ``valley`` / ``exact``.
@@ -150,6 +153,10 @@ def _build_rpeak_reviewer_class():
                 "e", self._toggle_ectopic, description="Toggle ectopic label on nearest peak",
                 group=edit,
             )
+            self.add_key_binding(
+                "ctrl+e", self._detect_ectopics,
+                description="Clear ectopic labels and re-detect", group=edit,
+            )
             for key, tag in _TAG_KEYS.items():
                 self.add_key_binding(
                     key, (lambda e=None, t=tag: self._tag(t)), description=f"Tag {tag}", group="Tags"
@@ -161,7 +168,8 @@ def _build_rpeak_reviewer_class():
             self.buttons.add(text="Flip (f)", type_="Push", action_func=self._flip)
             self.buttons.add(text="Save (s)", type_="Push", action_func=self.save)
             self.buttons.add(text="Mode (m)", type_="Push", action_func=self._cycle_mode)
-            self.buttons.add(text="Detect ectopics", type_="Push", action_func=self._detect_ectopics)
+            self.buttons.add(text="Detect ectopics (ctrl+e)", type_="Push",
+                             action_func=self._detect_ectopics)
             self.buttons.add(text="Help (ctrl+k)", type_="Push", action_func=self._help)
             self._mode_var = self.statevariables.add(
                 "edit mode", ["peak", "valley", "exact"], widget="dropdown"
@@ -259,12 +267,17 @@ def _build_rpeak_reviewer_class():
             self.update()
 
         def _detect_ectopics(self, event=None) -> None:
-            """Seed ectopic candidates on the current channel (button); confirm/clear with e."""
+            """Clear every ectopic label and re-detect (ctrl+e / button).
+
+            Destructive by design: a "detect" that unioned onto the existing set would make the
+            result depend on press history. The count of discarded labels is printed so the
+            destructive half is never silent."""
             ch = self._cur()
             before = len(ch.meta.get("rpeaks_idx_ectopic", []))
-            found = ch.detect_ectopics()
-            print(f"  ectopic candidates: {len(found) - before} new, {len(found)} total "
-                  f"-- press e on any to clear a false positive")
+            found = ch.detect_ectopics(replace=True)
+            print(f"  ectopics re-detected: {len(found)} labelled"
+                  + (f" ({before} previous label(s) discarded)" if before else "")
+                  + " -- press e on any peak to add or clear one")
             self.update()
 
         def _mark_noise(self, event=None) -> None:

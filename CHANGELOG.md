@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The reviewer's IBI trace and histogram no longer bridge a noisy segment.** `_plot`
+  took only the first return of `rpeak_times()`, discarding the `pk_idx` that says where
+  peaks were dropped, so `np.diff` produced one interval spanning the whole marked
+  stretch. On a real file a 16.63 s noise mark became a 17,206 ms "IBI", stretching the
+  axis to a 16.7 s span and flattening every real interval onto the floor -- making the
+  panel unusable for editing, which is exactly when noise gets marked. The trace now
+  breaks across the gap (NaN) and the histogram excludes it, as `EKG.ihr()` already did.
 - **`m` (cycle add mode) gave no feedback.** `StateVariable.cycle()` moves the index and
   fires its callbacks but does not repaint the sidebar widget, so the dropdown kept
   showing the previous mode and the key press looked like a no-op. Now calls

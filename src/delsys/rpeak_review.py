@@ -433,11 +433,22 @@ def _build_rpeak_reviewer_class():
             ax_raw.legend(loc="upper right", fontsize=7)
 
             # IBI over time (clean peaks, noisy segments excluded).
-            clean_idx = ch.rpeak_times()[0]
+            # rpeak_times returns (idx, pk_idx); pk_idx is the position of each surviving peak in
+            # the ORIGINAL ordered list, so a step of more than 1 means peaks were dropped in
+            # between -- a noisy segment. The difference across such a gap is not an inter-beat
+            # interval at all; plotting it puts one enormous point on the trace, flattening every
+            # real IBI against the axis and poisoning the histogram. Break the line there instead,
+            # exactly as EKG.ihr() does, and for the same reason.
+            clean_idx, pk_idx = ch.rpeak_times()
             rt = np.asarray(ch.t[clean_idx], dtype=float)
             if rt.size > 1:
-                ax_ibi.plot(rt[1:], np.diff(rt) * 1000.0, "o-", ms=3, color="C0")
-                ax_hist.hist(np.diff(rt) * 1000.0, bins=30, color="C2")
+                ibi = np.diff(rt) * 1000.0
+                contiguous = np.diff(np.asarray(pk_idx, dtype=int)) == 1
+                ibi = np.where(contiguous, ibi, np.nan)
+                ax_ibi.plot(rt[1:], ibi, "o-", ms=3, color="C0")
+                real = ibi[np.isfinite(ibi)]
+                if real.size:
+                    ax_hist.hist(real, bins=30, color="C2")
             ax_ibi.set_ylabel("IBI (ms)")
             ax_ibi.set_xlabel("time (s)")
             ax_hist.set_xlabel("IBI (ms)")
@@ -453,8 +464,10 @@ def _build_rpeak_reviewer_class():
             # Persistent on-figure shortcut legend (the command-line hint stays too).
             figure.text(
                 0.008, 0.004,
-                "a add  ·  d remove  ·  n noise(2 presses)  ·  f flip+redetect  ·  "
-                "m mode  ·  1/2/3 tag  ·  s save        Help button / ctrl+k = full list",
+                "a add  ·  d remove  ·  e ectopic  ·  n noise(2 presses)  ·  f flip+redetect  ·  "
+                "m mode  ·  alt+e re-detect ectopics  ·  1/2/3 tag  ·  s save\n"
+                "w/q next/prev suspect  ·  ctrl+g / ctrl+t pan 20% / 1 screen "
+                "(+shift = left)        Help button / ctrl+k = full list",
                 fontsize=7.5, family="monospace", color="0.4", va="bottom",
             )
 

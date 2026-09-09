@@ -359,7 +359,8 @@ class EKG(pysampled.Data):
             # loads that share an origin: reload the same file with a different t0/clock_mul and
             # every added/removed/ectopic time misses its peak, silently. Stamping the frame lets
             # apply_rpeaks_decision say so out loud instead.
-            "frame": {"t0": float(t[0])},
+            "frame": {"t0": float(t[0]),
+                      "clock_mul": float((self.meta or {}).get("clock_mul", 1.0) or 1.0)},
             "added": [float(t[i]) for i in self.meta.get("rpeaks_idx_added", [])],
             "removed": [float(t[i]) for i in human_removed],
             "ectopic": [float(t[i]) for i in self.meta.get("rpeaks_idx_ectopic", [])],

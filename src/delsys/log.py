@@ -461,10 +461,17 @@ class Log:
         sibling ``<stem>.delsys-events`` sidecar, but does not read it. Use this
         for the raw ECG signal (e.g. the cleaner's reference); use :attr:`ekg` to
         get curated R-peaks.
+
+        Also stamps ``meta["clock_mul"]``: an R-peak decision records peak *times*, which are only
+        meaningful together with the clock they were measured on, and ``t0`` alone does not pin
+        that down. With both, a decision written on one clock is convertible to another --
+        ``t_new = t0_new + (t_old - t0_old) * clock_mul_old / clock_mul_new`` (the sample rate
+        cancels).
         """
         bundle = _aggregate_bundles([s.ekg for s in self.sensors if hasattr(s, "ekg")], EKG)
         if bundle is not None:
             bundle.meta["source"] = self.fname
+            bundle.meta["clock_mul"] = float(getattr(self, "clock_mul", 1.0) or 1.0)
         return bundle
 
     @property

@@ -289,7 +289,8 @@ def _canonical_rpeaks_value(val) -> dict:
         out["detector"] = _canonical_detector(val.get("detector") or {})
         fr = val.get("frame")
         if isinstance(fr, dict):                 # the clock the peak times are expressed on
-            out["frame"] = {"t0": float(fr.get("t0", 0.0))}
+            out["frame"] = {"t0": float(fr.get("t0", 0.0)),
+                            "clock_mul": float(fr.get("clock_mul", 1.0))}
     return out
 
 

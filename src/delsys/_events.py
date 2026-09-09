@@ -229,6 +229,7 @@ def marker_types(path: str) -> List[str]:
 #     {"detector": {"name": "pn", "highpass": 5.0, "hr_max": 200.0},
 #      "added":   [1.402, 2.101],   # peak times (s) merged into the result
 #      "removed": [3.550],          # detector-default peak times suppressed
+#      "ectopic": [7.881],          # peaks LABELLED ectopic (kept, not removed)
 #      "flipped": false,            # polarity flip re-runs detection on load
 #      "tags":    ["reviewed"]}     # free-text review tags
 #
@@ -270,6 +271,7 @@ def _canonical_rpeaks_value(val) -> dict:
         return {}
     added = _as_time_list(val.get("added"))
     removed = _as_time_list(val.get("removed"))
+    ectopic = _as_time_list(val.get("ectopic"))
     flipped = bool(val.get("flipped", False))
     tags = [str(t) for t in (val.get("tags") or [])]
     out: dict = {}
@@ -277,6 +279,8 @@ def _canonical_rpeaks_value(val) -> dict:
         out["added"] = added
     if removed:
         out["removed"] = removed
+    if ectopic:
+        out["ectopic"] = ectopic
     if flipped:
         out["flipped"] = True
     if tags:
@@ -293,6 +297,7 @@ def _read_rpeaks_value(val) -> dict:
         "detector": _canonical_detector(val.get("detector") or {}) or {"name": "pn"},
         "added": _as_time_list(val.get("added")),
         "removed": _as_time_list(val.get("removed")),
+        "ectopic": _as_time_list(val.get("ectopic")),
         "flipped": bool(val.get("flipped", False)),
         "tags": [str(t) for t in (val.get("tags") or [])],
     }

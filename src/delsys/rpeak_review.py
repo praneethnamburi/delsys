@@ -20,6 +20,14 @@ Controls (keys mirrored by buttons where noted):
 - **d** — remove the nearest R-peak to the cursor.
 - **n** — mark a noisy segment (two presses = start/end); peaks inside are
   dropped from :meth:`~delsys.ekg.EKG.rpeak_times`.
+- **e** — toggle the **ectopic** label on the nearest peak. An ectopic is a
+  *classification of a real beat*, not a removal: the beat happened, it just
+  isn't sinus. It stays in the peak set (so the trace still reads correctly)
+  and downstream excludes or interpolates the two intervals it corrupts, and
+  can count ectopic burden. Use this rather than **d** — deleting the peak
+  leaves one long interval spanning the beat, which is worse.
+- **Detect ectopics** button — seeds candidates from the premature-beat
+  signature (short interval + compensatory pause); confirm or clear with **e**.
 - **f** / **Flip** button — flip polarity **and re-detect** (the one edit that
   changes the detector baseline, not just the human diff).
 - **m** / **Mode** — cycle the add snap: ``peak`` / ``valley`` / ``exact``.
@@ -138,6 +146,10 @@ def _build_rpeak_reviewer_class():
             self.add_key_binding(
                 "m", self._cycle_mode, description="Cycle add mode (peak/valley/exact)", group=edit
             )
+            self.add_key_binding(
+                "e", self._toggle_ectopic, description="Toggle ectopic label on nearest peak",
+                group=edit,
+            )
             for key, tag in _TAG_KEYS.items():
                 self.add_key_binding(
                     key, (lambda e=None, t=tag: self._tag(t)), description=f"Tag {tag}", group="Tags"
@@ -149,6 +161,7 @@ def _build_rpeak_reviewer_class():
             self.buttons.add(text="Flip (f)", type_="Push", action_func=self._flip)
             self.buttons.add(text="Save (s)", type_="Push", action_func=self.save)
             self.buttons.add(text="Mode (m)", type_="Push", action_func=self._cycle_mode)
+            self.buttons.add(text="Detect ectopics", type_="Push", action_func=self._detect_ectopics)
             self.buttons.add(text="Help (ctrl+k)", type_="Push", action_func=self._help)
             self._mode_var = self.statevariables.add(
                 "edit mode", ["peak", "valley", "exact"], widget="dropdown"
@@ -217,6 +230,41 @@ def _build_rpeak_reviewer_class():
                 if nearest not in ch.meta["rpeaks_idx_removed"]:
                     ch.meta["rpeaks_idx_removed"].append(nearest)
                 print(f"  - peak @ {float(ch.t[nearest]):.3f}s")
+            self.update()
+
+        def _toggle_ectopic(self, event=None) -> None:
+            """Label / unlabel the nearest peak as ectopic (key ``e``).
+
+            A toggle rather than an add/remove pair: the peak already exists, this only classifies
+            it, and one key that undoes itself is harder to get wrong than two that don't."""
+            if event is None or event.xdata is None:
+                return
+            ch = self._cur()
+            t_marked = float(event.xdata)
+            final = np.array(ch._get_rpeaks_from_meta(), dtype=int)
+            if final.size == 0:
+                return
+            ft = np.asarray(ch.t)[final]
+            nearest = int(final[int(np.argmin(np.abs(ft - t_marked)))])
+            if abs(float(ch.t[nearest]) - t_marked) > self._win_remove[1]:
+                return
+            ch.meta.setdefault("rpeaks_idx_ectopic", [])
+            if nearest in ch.meta["rpeaks_idx_ectopic"]:
+                ch.meta["rpeaks_idx_ectopic"] = [i for i in ch.meta["rpeaks_idx_ectopic"]
+                                                 if i != nearest]
+                print(f"  ectopic label CLEARED @ {float(ch.t[nearest]):.3f}s")
+            else:
+                ch.meta["rpeaks_idx_ectopic"].append(nearest)
+                print(f"  ectopic @ {float(ch.t[nearest]):.3f}s")
+            self.update()
+
+        def _detect_ectopics(self, event=None) -> None:
+            """Seed ectopic candidates on the current channel (button); confirm/clear with e."""
+            ch = self._cur()
+            before = len(ch.meta.get("rpeaks_idx_ectopic", []))
+            found = ch.detect_ectopics()
+            print(f"  ectopic candidates: {len(found) - before} new, {len(found)} total "
+                  f"-- press e on any to clear a false positive")
             self.update()
 
         def _mark_noise(self, event=None) -> None:
@@ -292,6 +340,10 @@ def _build_rpeak_reviewer_class():
                 ax_raw.plot(t[added], y[added], "+", color="seagreen", ms=10, label="added")
             if removed.size:
                 ax_raw.plot(t[removed], y[removed], "x", color="0.6", ms=7, label="removed")
+            ectopic = np.asarray(ch.meta.get("rpeaks_idx_ectopic", []), dtype=int)
+            if ectopic.size:
+                ax_raw.plot(t[ectopic], y[ectopic], "o", mfc="none", mec="crimson", mew=1.6,
+                            ms=11, label="ectopic")
             for a, b in ch.meta.get("noisy_segments_idx", []):
                 ax_raw.axvspan(float(t[a]), float(t[b]), color="0.5", alpha=0.15)
             ax_raw.set_ylabel("EKG (mV)")

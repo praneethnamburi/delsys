@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ectopic-beat labelling (`rpeaks_idx_ectopic`, reviewer key `e`, "Detect ectopics"
+  button).** An ectopic is a *classification of a real beat*, not a removal: the beat
+  happened, it just isn't sinus, so it stays in the peak set and carries a label. The
+  label lives on the **peak**, not on an interval — the two intervals it corrupts (the
+  premature one before, the compensatory pause after) follow deterministically, and only
+  a peak identity supports the standard interpolation-based correction. Stored inside the
+  `rpeaks` decision (`"ectopic": [times]`), so it round-trips through
+  `rpeaks_decision()` / `apply_rpeaks_decision()` and re-snaps to the curated peak set
+  after a re-detect or a polarity flip. `EKG.ectopic_times()` reads them back;
+  `EKG.detect_ectopics()` seeds candidates from the premature-beat signature (short
+  interval + compensatory pause) for a human to confirm or clear.
+  Distinct from a noisy segment on purpose: noise is an *interval* where we cannot know
+  what the heart did (exclude), an ectopic is a *beat* we know exactly (exclude **or**
+  correct, and count as a burden).
+
+### Fixed
+
+- **`m` (cycle add mode) gave no feedback.** `StateVariable.cycle()` moves the index and
+  fires its callbacks but does not repaint the sidebar widget, so the dropdown kept
+  showing the previous mode and the key press looked like a no-op. Now calls
+  `statevariables.update_display()` and echoes the new mode.
+
 ## [0.5.1] - 2026-07-14
 
 ### Changed

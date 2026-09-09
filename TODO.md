@@ -169,27 +169,3 @@ To regenerate this snapshot::
 ## Domain / units
 
 - VO2Master `VO2_absolute` returns raw CSV values (~37000 for moderate exercise). Likely a units issue, not a column-mapping one — verify against a known-correct VO2 reading and add unit conversion if needed.
-
-## Convert R-peak decisions across clocks (instead of refusing them)
-
-An R-peak decision stores peak **times**, so it is only meaningful together with the clock they
-were measured on. `apply_rpeaks_decision` currently *skips* the human diff when the origin does not
-match, which is safe but lossy: the conversion is exact and should be done instead.
-
-The stored frame is now `{"t0", "clock_mul"}` (stamped by `Log.ekg` / `ekg_raw` into
-`meta["clock_mul"]`, recorded by `rpeaks_decision`). Since `t(i) = t0 + i / (sr_stored * clock_mul)`,
-the sample index is the invariant and the sample rate cancels:
-
-    t_new = t0_new + (t_old - t0_old) * clock_mul_old / clock_mul_new
-
-Verified against the sample-index invariant on a 1.21 M-sample record across
-(t0=-11.5587, cm=1.000015411) -> (t0=0, cm=1.0): **max error 2.3e-13 s**, versus 11.57 s
-uncorrected.
-
-To do:
-- Apply the conversion in `apply_rpeaks_decision` to `added` / `removed` / `ectopic` before
-  snapping, and drop the skip-on-mismatch path.
-- Fall back to `clock_mul_old = clock_mul_new` for pre-stamp sidecars (t0-only, or no frame at
-  all), which is what every mithic-written file used anyway.
-- Same treatment for the `noise` track's interval bounds, which have the identical problem.
-- Keep a warning when the frames differ, but as information, not a refusal.

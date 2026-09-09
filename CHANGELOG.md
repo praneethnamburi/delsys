@@ -24,12 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what the heart did (exclude), an ectopic is a *beat* we know exactly (exclude **or**
   correct, and count as a burden). `ctrl+e` / the button **clears every label and
   re-detects** — a reset, so the result depends on the signal and not on press history.
-- **Time-frame stamp on the R-peak decision (`"frame": {"t0": ...}`), with a warning on
-  mismatch.** Peak times reproduce across sample *grids* but not across *origins*: reload
-  an annotated file with a different `t0` and every added / removed / ectopic time misses
-  its peak, dropping hand curation with no message. The decision now records the origin it
-  was written on and `apply_rpeaks_decision` warns when it does not match. Pre-existing
-  sidecars carry no stamp and are simply not checked.
+- **R-peak decisions are now portable across clocks (`"frame": {"t0", "clock_mul"}`).**
+  A decision stores peak *times*, which mean nothing without the clock they were measured
+  on: reloading an annotated file with a different `t0` used to attach curation to the
+  WRONG beats (measured on a real file: 3 of 6 ectopic labels survived, all
+  mis-attributed). The decision now records the frame it was written on, and
+  `apply_rpeaks_decision` **converts** `added` / `removed` / `ectopic` and the `noise`
+  interval bounds onto the loading clock. The sample index is the invariant, so with
+  `t(i) = t0 + i / (sr_stored * clock_mul)` the stored rate cancels:
+
+      t_new = t0_new + (t_old - t0_old) * clock_mul_old / clock_mul_new
+
+  Verified to land on identical sample indices across shifted `t0`, changed `clock_mul`,
+  both, and extremes (`t0=-500, clock_mul=0.9999`). Sidecars written before the stamp are
+  assumed to share the loading clock, which is what every writer did at the time.
 
 ### Fixed
 

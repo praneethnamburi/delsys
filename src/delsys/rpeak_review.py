@@ -26,7 +26,7 @@ Controls (keys mirrored by buttons where noted):
   and downstream excludes or interpolates the two intervals it corrupts, and
   can count ectopic burden. Use this rather than **d** — deleting the peak
   leaves one long interval spanning the beat, which is worse.
-- **ctrl+e** / **Detect ectopics** button — clear every ectopic label and
+- **alt+e** / **Detect ectopics** button — clear every ectopic label and
   re-run detection from the premature-beat signature (short interval +
   compensatory pause); then confirm or clear individually with **e**. It is a
   *reset*, so running it twice gives the same answer — and it discards manual
@@ -36,6 +36,18 @@ Controls (keys mirrored by buttons where noted):
 - **m** / **Mode** — cycle the add snap: ``peak`` / ``valley`` / ``exact``.
 - **1** / **2** / **3** — tag ``reviewed`` / ``representative`` / ``interesting``.
 - **s** / **Save** button — write the decision(s) to ``<stem>.delsys-events``.
+
+Browsing (all left-hand, so the pointing hand never leaves the mouse):
+
+- **w** / **q** — jump to the next / previous *suspect* and centre it, keeping the
+  current zoom. Suspects come from :meth:`~delsys.ekg.EKG.suspect_times` — an RR out of
+  range, a missed-beat-like gap, a premature-beat signature, or an existing ectopic
+  label. This is the browsing that matters: a long record is ~60 screens at QRS zoom and
+  only a handful are worth looking at, so travel between them rather than past them.
+- **ctrl+g** / **ctrl+t** — pan right by 20 % of a screen (keeps context) or a whole
+  screen (moves on), at whatever zoom you are at; add **shift** to go left. Left-hand, and
+  the same keys as DUSTrack's two slowest advances so the muscle memory carries over.
+  ``,`` and ``/`` remain the framework's right-hand equivalents of the 20 % nudge.
 
 ``datanavigator`` is imported lazily (inside the factory) so the delsys core
 stays dnav-free.
@@ -154,9 +166,26 @@ def _build_rpeak_reviewer_class():
                 group=edit,
             )
             self.add_key_binding(
-                "ctrl+e", self._detect_ectopics,
+                "alt+e", self._detect_ectopics,
                 description="Clear ectopic labels and re-detect", group=edit,
             )
+            browse = "Browsing"
+            self.add_key_binding("w", (lambda e=None: self._jump_suspect(+1)),
+                                 description="Next suspect (centre, keep zoom)", group=browse)
+            self.add_key_binding("q", (lambda e=None: self._jump_suspect(-1)),
+                                 description="Previous suspect (centre, keep zoom)", group=browse)
+            # Two speeds are enough: a nudge that keeps context, and a full screen that moves on.
+            # Left-hand keys, and the same ones as DUSTrack's two slowest advances, so the pointing
+            # hand never leaves the mouse and the muscle memory carries across the two tools.
+            # Reuses the framework's pan(), which preserves the zoom and redraws without clearing.
+            for key, frac, label in (("ctrl+g", 0.2, "20%"), ("ctrl+t", 1.0, "a screen")):
+                self.add_key_binding(
+                    key, (lambda e=None, f=frac: self.pan(direction="right", frac=f)),
+                    description=f"Pan right {label}", group=browse)
+                self.add_key_binding(
+                    key.replace("ctrl+", "ctrl+shift+"),
+                    (lambda e=None, f=frac: self.pan(direction="left", frac=f)),
+                    description=f"Pan left {label}", group=browse)
             for key, tag in _TAG_KEYS.items():
                 self.add_key_binding(
                     key, (lambda e=None, t=tag: self._tag(t)), description=f"Tag {tag}", group="Tags"
@@ -168,7 +197,7 @@ def _build_rpeak_reviewer_class():
             self.buttons.add(text="Flip (f)", type_="Push", action_func=self._flip)
             self.buttons.add(text="Save (s)", type_="Push", action_func=self.save)
             self.buttons.add(text="Mode (m)", type_="Push", action_func=self._cycle_mode)
-            self.buttons.add(text="Detect ectopics (ctrl+e)", type_="Push",
+            self.buttons.add(text="Detect ectopics (alt+e)", type_="Push",
                              action_func=self._detect_ectopics)
             self.buttons.add(text="Help (ctrl+k)", type_="Push", action_func=self._help)
             self._mode_var = self.statevariables.add(
@@ -240,6 +269,47 @@ def _build_rpeak_reviewer_class():
                 print(f"  - peak @ {float(ch.t[nearest]):.3f}s")
             self.update()
 
+        def _xspan(self):
+            """Current x-limits of the browse axis, or ``None`` before the first draw."""
+            ax = self._ax_raw
+            return None if ax is None else tuple(float(v) for v in ax.get_xlim())
+
+        def _centre_on(self, t: float) -> None:
+            """Centre the browse axis on ``t``, keeping the current span (i.e. the zoom)."""
+            span = self._xspan()
+            if span is None:
+                return
+            half = (span[1] - span[0]) / 2.0
+            self._xlim = (t - half, t + half)
+            self._ax_raw.set_xlim(self._xlim)
+            plt.draw()
+            self.update_without_clear()
+
+        def _jump_suspect(self, step: int) -> None:
+            """Centre the next (``+1``) / previous (``-1``) suspect at the current zoom."""
+            span = self._xspan()
+            if span is None:
+                return
+            here = 0.5 * (span[0] + span[1])
+            sus = self._cur().suspect_times()
+            if not sus:
+                print("  no suspects on this channel")
+                return
+            times = [t for t, _r in sus]
+            if step > 0:
+                cand = [i for i, t in enumerate(times) if t > here + 1e-6]
+                j = cand[0] if cand else None
+            else:
+                cand = [i for i, t in enumerate(times) if t < here - 1e-6]
+                j = cand[-1] if cand else None
+            if j is None:
+                print(f"  no {'further' if step > 0 else 'earlier'} suspects "
+                      f"({len(times)} total)")
+                return
+            t, reason = sus[j]
+            print(f"  suspect {j + 1}/{len(times)}: {reason} @ {t:.3f}s")
+            self._centre_on(t)
+
         def _toggle_ectopic(self, event=None) -> None:
             """Label / unlabel the nearest peak as ectopic (key ``e``).
 
@@ -267,7 +337,7 @@ def _build_rpeak_reviewer_class():
             self.update()
 
         def _detect_ectopics(self, event=None) -> None:
-            """Clear every ectopic label and re-detect (ctrl+e / button).
+            """Clear every ectopic label and re-detect (alt+e / button).
 
             Destructive by design: a "detect" that unioned onto the existing set would make the
             result depend on press history. The count of discarded labels is printed so the

@@ -551,6 +551,42 @@ class EKG(pysampled.Data):
         self.meta["rpeaks_idx_ectopic"] = sorted(cur | set(hit))
         return self.meta["rpeaks_idx_ectopic"]
 
+    def suspect_times(self, short: float = 0.85, tol: float = 0.20, local: int = 5,
+                      missed: float = 1.8) -> List[tuple]:
+        """Places in the record worth a human's eyes: ``[(time, reason), ...]``, time-ordered.
+
+        Review is a search problem -- a 15-minute record at a zoom that resolves a QRS is ~60
+        screens, of which two or three matter. This returns the candidates so the reviewer can
+        travel between them instead of panning past everything in between:
+
+        * ``range``   -- RR outside 0.3-1.5 s (40-200 bpm); a miss or a spurious detection.
+        * ``missed``  -- RR above ``missed`` x the local median: what a dropped R-peak looks like.
+        * ``ectopic`` -- a short interval followed by a compensatory pause (the premature-beat
+          signature), whether or not it has been labelled yet.
+        * ``labelled``-- already carries an ectopic label, so a second pass can revisit them.
+        """
+        if len(self.meta.get("rpeaks_idx_default", [])) == 0:
+            self.find_rpeaks()          # _get_rpeaks_from_meta does NOT detect; rpeak_times does
+        peaks = np.array(self._get_rpeaks_from_meta(), dtype=int)
+        if peaks.size < 3:
+            return []
+        t = np.asarray(self.t)[peaks]
+        rr = np.diff(t)
+        out = {}
+        for i in np.flatnonzero((rr < 0.30) | (rr > 1.50)):
+            out.setdefault(float(t[i + 1]), "range")
+        if len(rr) > 2 * local + 1:
+            med = np.array([np.median(rr[max(0, i - local):i + local + 1]) for i in range(len(rr))])
+            for i in np.flatnonzero((med > 0) & (rr > missed * med)):
+                out.setdefault(float(t[i + 1]), "missed")
+            for i in range(len(rr) - 1):
+                if med[i] > 0 and rr[i] < short * med[i] \
+                        and abs((rr[i] + rr[i + 1]) / (2 * med[i]) - 1.0) < tol:
+                    out.setdefault(float(t[i + 1]), "ectopic")
+        for i in self.meta.get("rpeaks_idx_ectopic", []):
+            out[float(self.t[int(i)])] = "labelled"
+        return sorted(out.items())
+
     def _windows_to_idx_pairs(self, windows: List[List[float]]) -> List[List[int]]:
         """Convert ``[[t0, t1], ...]`` noise windows to ``[[i0, i1], ...]`` pairs."""
         t = self.t

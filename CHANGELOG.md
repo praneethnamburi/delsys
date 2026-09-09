@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both, and extremes (`t0=-500, clock_mul=0.9999`). Sidecars written before the stamp are
   assumed to share the loading clock, which is what every writer did at the time.
 
+- **Left-hand browsing in the R-peak reviewer.** `ctrl+g` / `ctrl+t` pan right by 20 % of
+  a screen or a whole screen at the current zoom (`ctrl+shift+` for left), reusing the
+  framework's `pan()`; same keys and the same rationale as DUSTrack's frame advance, so
+  the pointing hand never leaves the mouse and the muscle memory carries between tools.
+  `,` and `/` remain the right-hand 20 % nudge.
+- **Anomaly-driven navigation (`w` / `q`, `EKG.suspect_times()`).** Jump to the next /
+  previous *suspect* and centre it, keeping the zoom. A suspect is an RR out of range, a
+  missed-beat-like gap, a premature-beat signature, or an existing ectopic label. Review
+  is a search problem — a 1000 s record is ~70 screens at QRS zoom and only a handful are
+  worth looking at — so travel between the candidates rather than past everything in
+  between. (Measured: s019 Trial_5, 145 suspects over 71 screens; a curated file, 0.)
+
 ### Fixed
 
 - **`m` (cycle add mode) gave no feedback.** `StateVariable.cycle()` moves the index and

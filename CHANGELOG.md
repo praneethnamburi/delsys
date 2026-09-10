@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`<stem>.delsys-events` is written atomically.** `write_events` used
+  `open(path, "w")`, which truncates before writing: a reader in another process could
+  observe an empty or half-written sidecar, and a crash mid-save destroyed hand curation
+  outright. Now writes a sibling temp file, fsyncs, and `os.replace`s it into place.
 - **The reviewer's IBI trace and histogram no longer bridge a noisy segment.** `_plot`
   took only the first return of `rpeak_times()`, discarding the `pk_idx` that says where
   peaks were dropped, so `np.diff` produced one interval spanning the whole marked

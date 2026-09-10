@@ -43,6 +43,7 @@ are unused here — these are hand-placed, not algorithm-seeded).
 
 import json
 import os
+import tempfile
 from typing import Dict, List, Optional, Union
 
 from delsys import _noise
@@ -128,9 +129,26 @@ def write_events(path: str, events: Dict[str, dict]) -> str:
                     "signals": signals,
                 }
     doc = {"schema": EVENTS_SCHEMA, "events": body}
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(doc, f, indent=2, sort_keys=True)
-        f.write("\n")
+    # Atomic: sibling temp file, fsync, then os.replace (atomic on Windows and POSIX).
+    # open(path, "w") truncates FIRST, so a reader in another process -- an analysis run
+    # over these same sidecars, say -- can observe an empty or half-written file, and a
+    # crash mid-write destroys hand curation outright. Same directory keeps the replace
+    # on one volume.
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".delsys-events.", dir=d)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 

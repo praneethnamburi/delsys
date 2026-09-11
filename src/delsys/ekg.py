@@ -533,6 +533,9 @@ class EKG(pysampled.Data):
             local: half-width (beats) of the local median.
             replace: clear existing labels before detecting (idempotent reset).
         """
+        if len(self.meta.get("rpeaks_idx_default", [])) == 0:
+            self.find_rpeaks()      # _get_rpeaks_from_meta does NOT detect; without this a call
+                                    # on a freshly loaded EKG silently finds nothing
         if replace:
             self.meta["rpeaks_idx_ectopic"] = []
         peaks = np.array(self._get_rpeaks_from_meta(), dtype=int)

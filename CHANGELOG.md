@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`EKG.detect_ectopics()` found nothing when called on a freshly loaded EKG.** Like
+  `suspect_times` before it, it read the peak set via `_get_rpeaks_from_meta()`, which --
+  unlike `rpeak_times()` -- does not run detection, so on a file with no sidecar it
+  silently returned zero candidates. Masked inside the reviewer, which seeds detection at
+  construction, but wrong for any programmatic call. s060 Trial_7 goes 0 -> 32 candidates.
 - **`<stem>.delsys-events` is written atomically.** `write_events` used
   `open(path, "w")`, which truncates before writing: a reader in another process could
   observe an empty or half-written sidecar, and a crash mid-save destroyed hand curation

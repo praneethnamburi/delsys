@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Amplitude normalisation and the Rudolph co-contraction index (`reference`, `normalize`,
+  `cocontraction`, `Reference`).** `cocontraction(a, b)` and `a.cocontraction(b)` both give
+  `CCI = (lo/hi) * (lo + hi)` per sample (Rudolph et al. 2000,
+  [doi:10.1007/s001670000130](https://doi.org/10.1007/s001670000130)). **At rest the index is
+  zero, and that is the limit rather than a convention**: `lo <= hi` bounds the ratio in [0, 1],
+  so `CCI <= lo + hi` and the sum term drags it to zero as activation falls — only the `0/0` needs
+  guarding.
+  `reference(lf)` reduces every channel to one amplitude, keyed by **channel name** (a sensor swap
+  changes the number while the muscle stays the same). The default statistic is the **maximum of
+  the processed envelope**, which is the published practice rather than a local choice — Halaki &
+  Ginn 2012, [doi:10.5772/49957](https://doi.org/10.5772/49957): "the maximum value obtained from
+  the processed signals during all repetitions of the test ... processed in the same way". A
+  percentile (`stat="p99"`) is available for a take with a known artifact, but it is a departure
+  and should be reported as one.
+  `Reference` records **how** it was measured (`stat`, `source`, `rms_kw`) and round-trips to JSON,
+  because "processed in the same way" is the load-bearing half of that recommendation and ISEK's
+  1999 standards require the averaging interval be reported. `normalize` **warns** when the
+  reference and the data were enveloped with different settings, rather than silently returning a
+  ratio of two different quantities.
+  Set the reference once per file — `Log(..., reference=ref)` or `lf.reference = ref` — and every
+  channel drawn from it inherits it. Omit the argument to inherit; pass `reference=None`
+  *explicitly* to compute the index unnormalised even when one is attached.
+
 - **Ectopic-beat labelling (`rpeaks_idx_ectopic`, reviewer key `e`, "Detect ectopics"
   button).** An ectopic is a *classification of a real beat*, not a removal: the beat
   happened, it just isn't sinus, so it stays in the peak set and carries a label. The
@@ -52,6 +75,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between. (Measured: s019 Trial_5, 145 suspects over 71 screens; a curated file, 0.)
 
 ### Fixed
+
+- **`EMG.rms(envelope_sr=...)` never actually delivered the requested rate, and the docstring said
+  it did.** The window step must be a whole number of input samples, so `pysampled` returns
+  `sr / round(sr / envelope_sr)`: a request for 240 Hz gives **251.9 Hz** on a 1259 Hz
+  single-differential channel and **246.9 Hz** on a 2222 Hz Quattro, with `t0` 132 µs apart
+  because the first window centre also moves. **Two channels of different native rate therefore
+  never shared a time grid** — so combining them sample-by-sample, as any agonist/antagonist index
+  must, silently compared samples from different moments. `rms` now documents the real behaviour
+  and records `envelope_sr_achieved` in its history; `cocontraction` **resamples the pair onto the
+  requested grid** over the span they share instead of assuming they already match. Linear
+  interpolation is far from the limiting approximation here — the envelope has already been
+  smoothed over `win_size` (50 ms), well above the ~4 ms grid.
 
 - **`EKG.detect_ectopics()` found nothing when called on a freshly loaded EKG.** Like
   `suspect_times` before it, it read the peak set via `_get_rpeaks_from_meta()`, which --

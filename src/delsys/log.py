@@ -127,9 +127,13 @@ class Log:
         clock_mul: float = 1.0,
         t0: float = 0.0,
         sensor_name_replace: Optional[Dict[str, str]] = None,
+        reference=None,
     ) -> None:
         if target_sr is None:
             target_sr = TARGET_SR
+        # Set before either load path: the h5 branch returns early, and ``emg`` stamps this onto
+        # every bundle it builds, so it has to exist by then.
+        self._reference = None
         if str(fname).lower().endswith((".h5", ".hdf5")):
             # HDF5 checkpoint: rebuild from the stored signals, resampling native
             # modalities to ``target_sr`` and applying ``clock_mul`` / ``t0`` at load.
@@ -137,6 +141,8 @@ class Log:
             from delsys import _hdf5
 
             _hdf5.read_into(self, fname, target_sr=target_sr, clock_mul=clock_mul, t0=t0)
+            if reference is not None:
+                self.reference = reference
             return
         if sensor_name_replace is None:
             sensor_name_replace = {}
@@ -214,6 +220,8 @@ class Log:
 
         self.sensors: List[Sensor] = self._signals_to_sensors(sensors_info, self.signals)
         self.sensor_groups: Dict[str, Sequence[int]] = {}
+        if reference is not None:
+            self.reference = reference
 
     #: Attributes whose first access hydrates a lazily-loaded HDF5 checkpoint
     #: (see :func:`delsys._hdf5.read_into`). Everything signal-derived flows through
@@ -450,9 +458,61 @@ class Log:
     # is added — existing pickled Logs gain these accessors automatically.
     # ------------------------------------------------------------------
 
-    emg: Optional[EMG] = property(  # type: ignore[assignment]
-        lambda self: _aggregate_bundles([s.emg for s in self.sensors if hasattr(s, "emg")], EMG)
-    )
+    @property
+    def reference(self):
+        """The amplitude :class:`~delsys.emg.Reference` used to normalise this Log's EMG.
+
+        Set it once per Log and every EMG bundle drawn from it inherits it, so
+        ``rms(normalize=True)`` and :func:`~delsys.emg.cocontraction` need no further argument.
+        ``lf.emg`` rebuilds its bundle on each access, so the reference has to live here on the
+        Log rather than on a bundle -- the same reason ``ekg_raw`` stamps ``source``.
+        """
+        return getattr(self, "_reference", None)
+
+    @reference.setter
+    def reference(self, ref) -> None:
+        """Attach a reference, checking its channels against this Log now rather than at first use.
+
+        A reference measured on a session whose channelmap has since changed (a swapped sensor
+        renumbers channels) would otherwise fail deep inside an analysis, or worse, normalise by
+        the wrong muscle. Warns on channels this Log has but the reference does not; those raise
+        only if something actually asks to normalise them.
+        """
+        if ref is None:
+            self._reference = None
+            return
+        bundle = _aggregate_bundles([s.emg for s in self.sensors if hasattr(s, "emg")], EMG)
+        have = list(getattr(bundle, "signal_names", []) or []) if bundle is not None else []
+        missing = [n for n in have if n not in ref]
+        if missing:
+            import warnings
+            warnings.warn(
+                f"delsys: reference has no amplitude for {missing}; normalising those channels "
+                f"will raise. Reference source: {getattr(ref, 'source', None)}", stacklevel=2)
+        self._reference = ref
+        # Stamp the per-sensor bundles too, not just the aggregate: ``find()`` / ``__getitem__`` /
+        # ``lf.left`` hand back the sensor's own EMG object, and a channel reached that way must
+        # inherit the reference exactly as one reached through ``lf.emg`` does. Otherwise
+        # rms(normalize=True) works or raises depending on which accessor you happened to use.
+        for sen in self.sensors:
+            bundle = getattr(sen, "emg", None)
+            if bundle is not None:
+                bundle.meta = dict(bundle.meta or {})
+                bundle.meta["reference"] = ref
+
+    @property
+    def emg(self) -> Optional[EMG]:
+        """The aggregate EMG bundle, carrying this Log's amplitude :attr:`reference` if one is set.
+
+        Stamps ``meta["reference"]`` so normalisation is inherited rather than threaded through
+        every call (the bundle is rebuilt on each access, so the stamp happens here).
+        """
+        bundle = _aggregate_bundles([s.emg for s in self.sensors if hasattr(s, "emg")], EMG)
+        if bundle is not None and getattr(self, "_reference", None) is not None:
+            bundle.meta = dict(bundle.meta or {})
+            bundle.meta["reference"] = self._reference
+        return bundle
+
     @property
     def ekg_raw(self) -> Optional[EKG]:
         """The aggregate EKG bundle **without** applying a saved rpeak decision.

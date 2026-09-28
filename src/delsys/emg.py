@@ -7,6 +7,11 @@ extractors (a NeuroKit2 wrapper and a hand-rolled temporal/frequency
 feature dict).
 """
 
+import datetime as _dt
+import json
+import os
+import warnings
+from collections.abc import Mapping
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import neurokit2 as nk
@@ -17,6 +22,15 @@ from scipy.fftpack import fft, fftfreq
 
 from delsys._metadata import SensorInfo
 from delsys.signals import _bundle_sensors
+
+#: Default output rate for amplitude envelopes, in Hz. Named because two things have to agree on
+#: it: :meth:`EMG.rms` requests it, and :func:`cocontraction` resamples a pair onto it.
+ENVELOPE_SR = 240.0
+
+#: Sentinel for "no reference argument was given, so inherit whatever the Log stamped on".
+#: Needed because ``None`` is a meaningful *value* for :func:`cocontraction` -- it says "compute
+#: the index unnormalised" -- and cannot also serve as the default.
+INHERIT = type("_Inherit", (), {"__repr__": lambda self: "INHERIT"})()
 
 
 class EMG(pysampled.Data):
@@ -178,14 +192,22 @@ class EMG(pysampled.Data):
         bandpass_high: float = 500.0,
         power_line_frequency: float = 60.0,
         win_size: float = 0.05,
-        envelope_sr: float = 240.0,
+        envelope_sr: float = ENVELOPE_SR,
+        normalize: bool = False,
     ) -> pysampled.Data:
         """RMS amplitude envelope on a clean filter chain.
 
         Pipeline: ``shift_baseline`` → highpass → lowpass → notch (power
-        line) → running RMS over ``win_size``. The window step is set to
-        ``1 / envelope_sr`` so the output sampling rate is exactly
-        ``envelope_sr``.
+        line) → running RMS over ``win_size``.
+
+        .. warning::
+           ``envelope_sr`` is a **request, not a guarantee.** The window step has to be a whole
+           number of input samples, so ``pysampled`` delivers ``sr / round(sr / envelope_sr)`` --
+           e.g. a request for 240 Hz gives 251.9 Hz on a 1259 Hz single-differential channel and
+           246.9 Hz on a 2222 Hz Quattro. ``t0`` also lands on the centre of the first window,
+           which differs with the window length in samples. **Two channels of different native
+           rate therefore never share a time grid**, and cannot be combined sample-by-sample
+           without resampling first -- which is what :func:`cocontraction` does.
 
         Notch-filtering the power line interference makes this preferable
         to ``process(amp_kind='rms')`` when working in line-frequency-noisy
@@ -202,11 +224,17 @@ class EMG(pysampled.Data):
                 hardware bandwidth is the dominant constraint).
             power_line_frequency: Notch frequency in Hz. Default 60.
             win_size: RMS window length in seconds. Default 0.05.
-            envelope_sr: Output sampling rate in Hz. Default 240.
+            envelope_sr: Requested output sampling rate in Hz. Default 240; see the warning
+                above -- the achieved rate is the nearest one a whole-sample step allows.
+            normalize: Divide each channel by its amplitude reference, giving a **fraction** of
+                that reference rather than mV. The reference comes from the Log
+                (``Log(..., reference=ref)`` or ``lf.reference = ref``); raises if none is
+                attached. See :func:`normalize`.
 
         Returns:
-            A :class:`pysampled.Data` holding the RMS amplitude envelope,
-            sampled at ``envelope_sr``. ``meta`` carries the source sensor
+            A :class:`pysampled.Data` holding the RMS amplitude envelope, sampled at
+            approximately ``envelope_sr`` (read ``.sr`` for the achieved rate; the history
+            records both). ``meta`` carries the source sensor
             and ``_history`` reflects the full filter + RMS chain.
 
         Example:
@@ -237,10 +265,19 @@ class EMG(pysampled.Data):
         # downstream code can still ask ``envelope.sensor.location`` and read
         # the full processing chain.
         envelope._history = filtered._history + [
-            ("rms", {"win_size": win_size, "envelope_sr": envelope_sr}),
+            ("rms", {"win_size": win_size, "envelope_sr": envelope_sr,
+                      "envelope_sr_achieved": float(envelope.sr)}),
         ]
         envelope.meta = dict(self.meta) if self.meta else {}
-        return envelope
+        return globals()["normalize"](envelope) if normalize else envelope
+
+    def cocontraction(self, other: "EMG", **kwargs) -> pysampled.Data:
+        """Co-contraction index against ``other`` -- see :func:`cocontraction`.
+
+        Method form of the module function; the index is symmetric, so ``a.cocontraction(b)`` and
+        ``b.cocontraction(a)`` agree.
+        """
+        return cocontraction(self, other, **kwargs)
 
     @staticmethod
     def _temp_funcs(signal: pysampled.Data, win_size: float) -> Dict[str, Callable]:
@@ -380,3 +417,319 @@ class EMG(pysampled.Data):
             features[name] = proc_sig.apply_running_win(func, win_size, win_inc)().flatten()
 
         return features
+
+
+# ---------------------------------------------------------------------------
+# Amplitude normalisation + co-contraction
+# ---------------------------------------------------------------------------
+#: Default statistic for :func:`reference`: the maximum of the smoothed/RMS envelope.
+#: Halaki & Ginn (2012, doi:10.5772/49957) state the accepted practice directly -- "the maximum
+#: value obtained from the processed signals during all repetitions of the test is then used as
+#: the reference value for normalizing the EMG signals, processed in the same way". Note the
+#: *processed*: the peak of an envelope, never a raw sample.
+REFERENCE_STAT = "max"
+#: Envelopes below this fraction of the reference are treated as numerically zero when forming
+#: the co-contraction ratio, to keep 0/0 out of the arithmetic. Not a physiological threshold --
+#: see :func:`cocontraction` for why the index tends to zero there anyway.
+COCONTRACTION_EPS = 1e-9
+
+
+class Reference(Mapping):
+    """Per-channel amplitude reference for normalising EMG, with its provenance.
+
+    A bare ``{channel: value}`` dict would lose the two things that make a normalised number
+    interpretable months later: *what* was measured and *how* it was reduced. So this carries
+    ``stat`` and ``source`` alongside ``values`` and round-trips to JSON.
+
+    Channels are keyed by **name** (the channelmap location, e.g. ``"RForearmFlexors"``), never by
+    sensor number: a sensor swap mid-study changes the number while the muscle stays the same, and
+    normalising the flexors by the deltoid's maximum is the kind of error that never announces
+    itself. Reads it as a mapping (``ref["RBiceps"]``, ``in``, ``len``).
+
+    Args:
+        values: ``{channel name: reference amplitude}`` in the units of the source EMG (mV).
+        stat: How each value was reduced from the envelope (see :func:`reference`).
+        source: Path of the trial the values came from -- an MVC take, or a task trial when
+            peak-of-task normalisation is being used instead.
+        created: ISO timestamp; filled in automatically.
+    """
+
+    def __init__(self, values: Dict[str, float], stat: str = REFERENCE_STAT,
+                 source: Optional[str] = None, created: Optional[str] = None,
+                 rms_kw: Optional[dict] = None) -> None:
+        self.values = {str(k): float(v) for k, v in dict(values).items()}
+        self.stat = str(stat)
+        self.source = source
+        self.created = created or _dt.datetime.now().isoformat(timespec="seconds")
+        #: The envelope settings the reference was measured with. Recorded because "process the
+        #: MVC exactly as the task signal" is the actual standard (Halaki & Ginn 2012; ISEK 1999,
+        #: which requires the averaging interval be *reported*) -- so a mismatch between the two
+        #: has to be visible rather than silent.
+        self.rms_kw = dict(rms_kw or {})
+
+    def __getitem__(self, key: str) -> float:
+        return self.values[key]
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __repr__(self) -> str:
+        return (f"Reference({len(self.values)} channels, stat={self.stat!r}, "
+                f"source={os.path.basename(self.source) if self.source else None!r})")
+
+    def save(self, path: str) -> str:
+        """Write to JSON. The project decides where -- a reference is per *session*, and delsys
+        has no session concept, so it is never auto-discovered the way ``.delsys-events`` is."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"values": self.values, "stat": self.stat, "source": self.source,
+                       "created": self.created, "rms_kw": self.rms_kw},
+                      f, indent=2, sort_keys=True)
+            f.write("\n")
+        return path
+
+    @classmethod
+    def load(cls, path: str) -> "Reference":
+        """Read back a saved reference."""
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return cls(d["values"], d.get("stat", REFERENCE_STAT), d.get("source"), d.get("created"),
+                   d.get("rms_kw"))
+
+
+def _channels(obj) -> List["EMG"]:
+    """Single-channel EMG bundles from an EMG bundle or a Log."""
+    emg = getattr(obj, "emg", obj)
+    if emg is None:
+        raise ValueError("no EMG channels found")
+    return emg.split_by_signal_name() if emg.n_signals() > 1 else [emg]
+
+
+def _reduce(env: np.ndarray, stat) -> float:
+    """Reduce an amplitude envelope to one reference number."""
+    env = np.asarray(env, dtype=float).reshape(-1)
+    env = env[np.isfinite(env)]
+    if env.size == 0:
+        return float("nan")
+    if isinstance(stat, (int, float)) and not isinstance(stat, bool):
+        return float(np.percentile(env, float(stat)))
+    if stat == "max":
+        return float(env.max())
+    if isinstance(stat, str) and stat.startswith("p"):
+        return float(np.percentile(env, float(stat[1:])))
+    raise ValueError(f"unknown reference stat {stat!r}; use 'max', 'pNN', or a percentile number")
+
+
+def _rms_params(env) -> dict:
+    """The envelope settings recorded on a processed signal, or ``{}`` if it carries none.
+
+    ``envelope_sr_achieved`` is dropped: it legitimately differs between channels of different
+    native rate (see :meth:`EMG.rms`), so comparing it would fire on every mixed-sensor pair.
+    """
+    for name, params in reversed(list(getattr(env, "_history", []) or [])):
+        if name == "rms":
+            return {k: v for k, v in dict(params).items() if k != "envelope_sr_achieved"}
+    return {}
+
+
+def reference(source, stat=REFERENCE_STAT, source_path: Optional[str] = None,
+              **rms_kw) -> Reference:
+    """Per-channel amplitude reference from a designated trial.
+
+    Pass whatever trial the *project* designates as the reference -- a maximal-effort (MVC) take,
+    or an ordinary task trial when no usable MVC exists and peak-of-task normalisation is the
+    fallback. Only ``Reference.source`` distinguishes the two, so the choice stays visible in the
+    record rather than becoming a separate code path.
+
+    Each channel is reduced from its :meth:`EMG.rms` envelope, not from the raw signal -- which is
+    the accepted practice rather than a choice made here: Halaki & Ginn (2012,
+    :doi:`10.5772/49957`) put it as "the maximum value obtained from the processed signals during
+    all repetitions of the test ... processed in the same way". Hence ``stat="max"`` by default:
+    the peak of an envelope, never of a raw sample. A percentile (``"p99"``, or a bare number) is
+    available as a robustness option when a take carries a known artifact, but it is a departure
+    from the cited practice -- say so if you use it.
+
+    **Process the reference exactly as the task signal.** That is the load-bearing half of the same
+    recommendation, and ISEK's 1999 standards require the averaging interval be *reported*, which
+    presumes it is fixed. ``rms_kw`` is therefore stored on the returned :class:`Reference`, and
+    :func:`normalize` warns when it does not match the envelope being normalised.
+
+    Args:
+        source: A :class:`~delsys.log.Log` or an EMG bundle.
+        stat: ``"max"``, ``"pNN"`` (e.g. ``"p99"``), or a percentile as a number.
+        source_path: Recorded as the reference's provenance; taken from a Log's ``fname``
+            when not given.
+        **rms_kw: Passed to :meth:`EMG.rms` (``win_size``, ``envelope_sr``, filter cutoffs).
+            Use the SAME settings here as in the analysis, or the normalisation is against a
+            differently-smoothed quantity.
+
+    Returns:
+        A :class:`Reference` keyed by channel name.
+    """
+    if source_path is None:
+        source_path = getattr(source, "fname", None)
+    values, effective = {}, {}
+    for ch in _channels(source):
+        name = (list(ch.signal_names or []) or [None])[0]
+        if name is None:
+            continue
+        env = ch.rms(**rms_kw)
+        values[name] = _reduce(np.asarray(env()), stat)
+        effective = effective or _rms_params(env)
+    return Reference(values, stat=stat, source=source_path, rms_kw=effective)
+
+
+def _resolve_reference(obj, reference):
+    """The reference to use: an explicit one, else whatever the Log stamped onto the bundle."""
+    if reference is not None:
+        return reference
+    meta = getattr(obj, "meta", None) or {}
+    return meta.get("reference")
+
+
+def normalize(data, reference=None):
+    """Divide each channel by its reference amplitude -> **fraction** of reference.
+
+    ``data`` is an amplitude envelope (the output of :meth:`EMG.rms`) or an EMG bundle; the
+    reference is taken from ``data.meta`` when not passed, which is how ``Log(..., reference=ref)``
+    reaches here without being threaded through every call.
+
+    Channels are matched by name. A channel with no entry in the reference raises rather than
+    passing through unnormalised -- a silently mixed-units array is worse than a stop.
+    """
+    ref = _resolve_reference(data, reference)
+    if ref is None:
+        raise ValueError(
+            "no reference: pass reference=..., or attach one with Log(..., reference=ref) / "
+            "lf.reference = ref")
+    names = list(getattr(data, "signal_names", []) or [])
+    x = np.asarray(data()).copy()
+    if x.ndim == 1:
+        x = x.reshape(-1, 1)
+    if not names:
+        raise ValueError("cannot normalize: the data carries no signal_names to match on")
+    missing = [n for n in names if n not in ref]
+    if missing:
+        raise KeyError(f"no reference amplitude for {missing}; reference has {sorted(ref)}")
+    want, got = dict(getattr(ref, "rms_kw", {}) or {}), _rms_params(data)
+    differs = {k: (want[k], got[k]) for k in want if k in got and want[k] != got[k]}
+    if differs:
+        warnings.warn(
+            "normalizing against a reference processed differently: "
+            + ", ".join(f"{k} {w!r} (reference) vs {g!r} (data)" for k, (w, g) in differs.items())
+            + ". The standard practice is to process both identically (Halaki & Ginn 2012); "
+            "the normalised values are otherwise a ratio of two different quantities.",
+            RuntimeWarning, stacklevel=2)
+    for i, n in enumerate(names):
+        v = float(ref[n])
+        x[:, i] = x[:, i] / v if np.isfinite(v) and v > 0 else np.nan
+    out = data._clone(x.reshape(np.asarray(data()).shape))
+    out.meta = dict(getattr(data, "meta", {}) or {})
+    out.meta["normalized"] = {"stat": getattr(ref, "stat", None),
+                              "source": getattr(ref, "source", None)}
+    return out
+
+
+def _on_common_grid(envs, sr):
+    """Resample envelopes onto one time grid at ``sr`` over the span they share.
+
+    Needed because :meth:`EMG.rms` cannot deliver a requested rate exactly (see its warning), so
+    two channels of different native rate arrive on different grids with different ``t0``. Linear
+    interpolation is adequate here and nowhere near the limiting approximation: an RMS envelope has
+    already been smoothed over ``win_size`` (50 ms by default), so it carries nothing near the
+    ~4 ms grid spacing.
+    """
+    t0 = max(float(e.t[0]) for e in envs)
+    t1 = min(float(e.t[-1]) for e in envs)
+    if not t1 > t0:
+        raise ValueError(
+            f"the envelopes share no time span (latest start {t0:.3f} s, earliest end {t1:.3f} s); "
+            "a pair from different trials cannot be compared")
+    t = t0 + np.arange(int(np.floor((t1 - t0) * sr)) + 1) / float(sr)
+    out = [np.interp(t, np.asarray(e.t, dtype=float), np.asarray(e()).reshape(-1)) for e in envs]
+    return t, out
+
+
+def cocontraction(a, b, reference=INHERIT, min_activation: float = 0.0, **rms_kw):
+    """Co-contraction index of an agonist/antagonist pair (Rudolph et al.).
+
+    Per sample, with ``lo`` and ``hi`` the smaller and larger of the two normalised amplitudes::
+
+        CCI = (lo / hi) * (lo + hi)
+
+    The ratio term is 1 when the pair is balanced and 0 when one muscle carries everything; the sum
+    term scales that by how hard they are both working, so balanced-but-quiet does not score like
+    balanced-and-loud.
+
+    Rudolph et al. 2000, *Knee Surg Sports Traumatol Arthrosc* 8(5):262-269,
+    :doi:`10.1007/s001670000130`. Note that the published renderings of the formula are not
+    consistent across the secondary literature that cites it; this is the common form, but check it
+    against the primary paper before it carries a claim.
+
+    **At rest the index is zero, and that is the limit, not a convention.** Because ``lo <= hi`` by
+    construction the ratio lies in [0, 1], so ``CCI <= lo + hi``; as activation falls to zero the
+    sum term drags the index to zero whatever the ratio does. The only care needed is arithmetic:
+    ``0/0`` is guarded so it yields 0 rather than NaN.
+
+    Both channels are enveloped here rather than accepted pre-computed, because the pair must share
+    a filter chain and an output grid to be comparable -- and these pairs routinely cross sampling
+    rates (a 1259 Hz single-differential flexor against a 2222 Hz Quattro extensor). That crossing
+    is exactly why the envelopes are then **resampled onto a common grid**: ``EMG.rms`` cannot hit a
+    requested ``envelope_sr`` exactly (its step is a whole number of input samples), so those two
+    channels come back at 251.9 and 246.9 Hz with ``t0`` 133 us apart. Multiplying them
+    sample-by-sample would silently drift the pair out of time. The result is on the requested
+    ``envelope_sr``, over the span the two channels share.
+
+    Args:
+        a, b: Single-channel :class:`EMG` bundles. Order is irrelevant -- the index is symmetric.
+        reference: A :class:`Reference`. **Omit it** to inherit whatever the Log stamped on
+            (``Log(..., reference=ref)`` / ``lf.reference = ref``) -- the normal path, since the
+            reference is set once per file. Pass ``reference=None`` *explicitly* to compute the
+            index unnormalised even when one is attached: legitimate within one pair on one
+            participant, but the sum term is then in raw mV and is not comparable across muscles
+            or people.
+        min_activation: Force the index to 0 where the larger envelope is below this (in reference
+            units, so a fraction when normalised). Default 0 -- the formula already tends to zero,
+            so this is only for trimming a noisy baseline.
+        **rms_kw: Passed to :meth:`EMG.rms` for both channels.
+
+    Returns:
+        A :class:`pysampled.Data` at ``envelope_sr``, unitless, ``meta["cocontraction"]`` recording
+        the two channel names, whether it was normalised, and both native rates.
+
+    Two properties of the index to carry into any interpretation:
+
+    * **It is not scale-invariant.** The sum term inherits whatever the normalisation set, so
+      values are comparable only across signals reduced by the same ``stat`` from references
+      collected the same way. Two studies' CCIs are not on one scale.
+    * **A low value is ambiguous** -- it can mean both muscles are quiet, or that one dominates.
+      Report the two activations alongside the index, not the index alone (Carey, De Groote &
+      Sawers, *PLOS One* 2026, :doi:`10.1371/journal.pone.0343081`, which also confirms that
+      amplitude-driven indices of this family go to zero when the antagonist is inactive).
+    """
+    for ch, nm in ((a, "a"), (b, "b")):
+        if ch is None or ch.n_signals() != 1:
+            raise ValueError(f"cocontraction needs single-channel EMG; {nm} has "
+                             f"{0 if ch is None else ch.n_signals()}")
+    ea, eb = a.rms(**rms_kw), b.rms(**rms_kw)
+    if reference is INHERIT:
+        ref = _resolve_reference(a, None) or _resolve_reference(b, None)
+    else:
+        ref = reference                     # including an explicit None: do not normalise
+    if ref is not None:
+        ea, eb = normalize(ea, ref), normalize(eb, ref)
+    sr = float(rms_kw.get("envelope_sr", ENVELOPE_SR))
+    t, (xa, xb) = _on_common_grid((ea, eb), sr)
+    lo, hi = np.minimum(xa, xb), np.maximum(xa, xb)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cci = np.where(hi > max(COCONTRACTION_EPS, float(min_activation)),
+                       (lo / hi) * (lo + hi), 0.0)
+    out = pysampled.Data(cci, sr=sr, t0=float(t[0]))
+    names = [(list(getattr(ch, "signal_names", []) or [None]) or [None])[0] for ch in (a, b)]
+    out.meta = {"cocontraction": {"channels": names, "normalized": ref is not None,
+                                  "reference_stat": getattr(ref, "stat", None),
+                                  "envelope_sr": sr,
+                                  "native_sr": [float(a.sr), float(b.sr)]}}
+    return out

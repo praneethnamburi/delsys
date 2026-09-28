@@ -212,6 +212,97 @@ class _MarkingMixin:
         """
         return [key]
 
+    # -- keeping the view put across a redraw -----------------------------
+
+    #: Last x-limits seen, so a redraw does not throw away where the user was looking.
+    _saved_xlim = None
+
+    def _time_axes(self) -> list:
+        """Every axis whose x is time -- one in the signal view, the stack in the sensor view."""
+        ax = getattr(self, "_ax", None)
+        if ax is not None:
+            return [ax]
+        return [a for a, _ in (getattr(self, "_panel_axes", None) or [])]
+
+    def _remember_xlim(self) -> None:
+        """Capture the current x-span. Call BEFORE the base ``update()`` recreates the axes."""
+        axes = self._time_axes()
+        if axes:
+            self._saved_xlim = tuple(axes[0].get_xlim())
+
+    def _restore_xlim(self) -> None:
+        """Put the x-span back. Call AFTER the base ``update()``.
+
+        Every mark goes through ``update()``, which in both views clears and replots -- so
+        without this, marking a window inside a 5 s zoom bounced the axis back to the whole
+        take and the next window had to be found again. Kept across channel/sensor navigation
+        too, deliberately: a mechanical artifact shows up on several sensors at the same
+        instant, so flipping through them at a fixed time window is how it gets confirmed.
+        The toolbar's home button still escapes to the full span, and is picked up as the new
+        saved span on the redraw after it.
+        """
+        if self._saved_xlim is None or self._auto_limits():
+            return
+        for a in self._time_axes():
+            a.set_xlim(self._saved_xlim)
+
+    def _auto_limits(self) -> bool:
+        """Whether the base browser's "Auto limits" toggle is asking for the full extent.
+
+        Same escape hatch, same name, as the EKG reviewer -- flip it on to get the old
+        snap-back-to-everything behaviour.
+        """
+        try:
+            return bool("Auto limits" in self.buttons and self.buttons["Auto limits"].state)
+        except Exception:  # noqa: BLE001 -- no such button on this browser
+            return False
+
+    def _shortcut_hint(self) -> str:
+        """The one-glance cheatsheet drawn on the figure. Built from the live specs, so a
+        marker track added to ``_default_marker_specs`` shows up here without a second edit."""
+        marks = "  ·  ".join(f"{key} {label}" for _slug, label, key, _size, _c in self._marker_specs)
+        dead = getattr(self, "_dead_key", None)
+        return ("n noise (2 presses)  ·  alt+n remove noise"
+                + (f"  ·  {dead} dead (all)" if dead else "")
+                + (f"  ·  {marks}" if marks else "")
+                + "  ·  s save\n"
+                "ctrl+g / ctrl+t pan 20% / 1 screen (+shift = left)"
+                "        Help button / ctrl+k = full list")
+
+    def _draw_shortcut_hint(self, figure) -> None:
+        """(Re)draw the legend. Called per update because both views replot, and the sensor
+        view clears the whole figure -- so the artist has to be replaced, not just created."""
+        old = getattr(self, "_hint_artist", None)
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:  # noqa: BLE001 -- figure was cleared, artist already gone
+                pass
+        self._hint_artist = figure.text(
+            0.008, 0.004, self._shortcut_hint(),
+            fontsize=7.5, family="monospace", color="0.4", va="bottom")
+
+    def _help(self, event=None) -> None:
+        """Open datanavigator's grouped key-binding cheatsheet (Help / ctrl+k)."""
+        self.show_key_bindings()
+
+    def _add_browse_bindings(self, group: str = "Browse") -> None:
+        """Two-speed x-axis panning, left-hand keys.
+
+        Same bindings and the same two speeds as the EKG reviewer (:mod:`delsys.rpeak_review`)
+        and DUSTrack, so the muscle memory carries across the three tools and the pointing hand
+        never leaves the mouse. ``pan()`` comes from the datanavigator base and preserves the
+        zoom level.
+        """
+        for key, frac, label in (("ctrl+g", 0.2, "20%"), ("ctrl+t", 1.0, "a screen")):
+            self.add_key_binding(
+                key, (lambda e=None, f=frac: self.pan(direction="right", frac=f)),
+                description=f"Pan right {label}", group=group)
+            self.add_key_binding(
+                key.replace("ctrl+", "ctrl+shift+"),
+                (lambda e=None, f=frac: self.pan(direction="left", frac=f)),
+                description=f"Pan left {label}", group=group)
+
     # -- noise track: key-addressed actions (each redraws) ----------------
 
     def _mark_window(self, key: str, a: float, b: float) -> None:
@@ -329,6 +420,7 @@ class _MarkingMixin:
         # Noise track (letter keys, so digits stay free for marker types).
         self.add_key_binding("n", self._mark_point, description="Add noise window (2 presses)")
         self.add_key_binding("alt+n", self._remove_window, description="Remove nearest noise window")
+        self._dead_key = dead_key
         if dead_key is not None:
             self.add_key_binding(
                 dead_key, self._toggle_dead_at, description="Toggle dead (whole recording)"
@@ -342,7 +434,10 @@ class _MarkingMixin:
             self.add_key_binding(
                 f"alt+{key}", self._remove_marker_event, description=f"Remove nearest {label}"
             )
+        self.add_key_binding("s", self.save, description="Save to sidecar", group="File")
+        self._add_browse_bindings()
         self.buttons.add(text="Save", type_="Push", action_func=lambda e: self.save())
+        self.buttons.add(text="Help (ctrl+k)", type_="Push", action_func=self._help)
 
     # -- overlay helpers --------------------------------------------------
 
@@ -469,8 +564,11 @@ def _build_signal_annotator_class():
             self.buttons.add(text="Mod scope", type_="Toggle", start_state=False)
 
         def update(self, event=None) -> None:
+            self._remember_xlim()
             super().update(event)
+            self._restore_xlim()
             self._label_axes()
+            self._draw_shortcut_hint(self.figure)
             self._clear_overlays()
             ax = getattr(self, "_ax", None)
             if ax is not None:
@@ -619,7 +717,10 @@ def _build_sensor_annotator_class():
             figure.suptitle(self._sensor_label(sensor))
 
         def update(self, event=None) -> None:
+            self._remember_xlim()
             super().update(event)  # PlotBrowser: clear + _plot_sensor (sets axes) + draw
+            self._restore_xlim()
+            self._draw_shortcut_hint(self.figure)
             self._clear_overlays()
             for ax, key in self._panel_axes:
                 # Own (coord-ful or whole-modality) windows in red; for a

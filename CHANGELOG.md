@@ -77,6 +77,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The noise annotator no longer throws away your zoom on every mark, and gains the EKG
+  reviewer's browsing.** Both views call `update()` after a mark, which clears and replots (the
+  sensor view recreates its axes outright), so marking a window inside a 5 s zoom bounced the
+  axis back to the whole take and the next window had to be found again. `_MarkingMixin` now
+  remembers the x-span across the redraw, honouring the base browser's **"Auto limits"** toggle
+  as the escape back to full extent -- same name and semantics as `rpeak_review`. The span is
+  kept across channel/sensor navigation too, deliberately: a mechanical artifact shows up on
+  several sensors at the same instant, so flipping through them at a fixed time window is how it
+  gets confirmed.
+  Added alongside it, all in the shared mixin so both views get them: **`ctrl+g` / `ctrl+t`**
+  pan right 20 % / one screen (`+shift` for left) -- the same keys and two speeds as the EKG
+  reviewer and DUSTrack, so the muscle memory carries and the pointing hand stays on the mouse;
+  a persistent **on-figure shortcut legend** built from the live marker specs (so it is
+  view-accurate and cannot advertise a binding that does not exist); a **Help (ctrl+k)** button
+  onto datanavigator's grouped cheatsheet; and **`s` to save**, which the annotator was missing
+  entirely while the EKG reviewer has always had it.
 - **`reference()` / `cocontraction()` validate `**rms_kw` instead of forwarding it blind.** A
   pass-through `**kwargs` fails deep inside the callee naming a function the caller never invoked,
   and swallows typos. Three cases now raise at the call site: settings wrapped in a dict

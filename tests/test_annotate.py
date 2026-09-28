@@ -60,7 +60,7 @@ def test_annotate_marks_channel_window_and_saves(fixtures_dir, tmp_path):
 
     sigs = _saved_noise(ann)
     key = format_signal_key(lf.signals[0])
-    assert sigs[key]["windows"] == [[0.02, 0.05]]
+    assert sigs[key]["added"] == [[0.02, 0.05]]
 
 
 def test_annotate_mod_scope_writes_coordless_key(fixtures_dir, tmp_path):
@@ -72,7 +72,7 @@ def test_annotate_mod_scope_writes_coordless_key(fixtures_dir, tmp_path):
 
     sigs = _saved_noise(ann)
     mod_key = format_signal_key(lf.signals[0], include_coord=False)
-    assert sigs[mod_key]["windows"] == [[0.10, 0.12]]
+    assert sigs[mod_key]["added"] == [[0.10, 0.12]]
 
 
 def test_annotate_toggle_dead_roundtrips(fixtures_dir, tmp_path):
@@ -97,7 +97,7 @@ def test_annotate_undo_drops_last_window(fixtures_dir, tmp_path):
     ann.add_window(0.06, 0.08)
     ann.undo()
 
-    assert ann._ann[_addr0(lf)]["windows"] == [[0.02, 0.05]]
+    assert ann._ann[_addr0(lf)]["added"] == [[0.02, 0.05]]
 
 
 def test_annotate_zero_width_drag_ignored(fixtures_dir, tmp_path):
@@ -105,7 +105,7 @@ def test_annotate_zero_width_drag_ignored(fixtures_dir, tmp_path):
     ann = lf.view()
     ann._current_idx = 0
     ann.add_window(0.03, 0.03)  # a click, not a drag
-    assert ann._ann.get(_addr0(lf), {"windows": []})["windows"] == []
+    assert ann._ann.get(_addr0(lf), {"added": []})["added"] == []
 
 
 def test_annotate_keypress_marks_window(fixtures_dir, tmp_path):
@@ -116,7 +116,7 @@ def test_annotate_keypress_marks_window(fixtures_dir, tmp_path):
     ann._mark_point(SimpleNamespace(xdata=0.02))
     ann._mark_point(SimpleNamespace(xdata=0.05))
 
-    assert ann._ann[_addr0(lf)]["windows"] == [[0.02, 0.05]]
+    assert ann._ann[_addr0(lf)]["added"] == [[0.02, 0.05]]
 
 
 def test_annotate_keypress_removes_nearest_window(fixtures_dir, tmp_path):
@@ -127,7 +127,7 @@ def test_annotate_keypress_removes_nearest_window(fixtures_dir, tmp_path):
     ann.add_window(0.10, 0.12)
     ann._remove_window(SimpleNamespace(xdata=0.11))  # nearest the second window
 
-    assert ann._ann[_addr0(lf)]["windows"] == [[0.02, 0.05]]
+    assert ann._ann[_addr0(lf)]["added"] == [[0.02, 0.05]]
 
 
 def test_annotate_auto_limits_on_by_default(fixtures_dir, tmp_path):
@@ -149,7 +149,7 @@ def test_annotate_seeds_from_legacy_noise_sidecar(fixtures_dir, tmp_path):
     write_noise_sidecar(sidecar_path_for(lf.fname), {key: [[0.2, 0.3]]})
 
     ann = lf.view()
-    assert ann._ann[_addr0(lf)]["windows"] == [[0.2, 0.3]]
+    assert ann._ann[_addr0(lf)]["added"] == [[0.2, 0.3]]
     # Saving migrates the marks into the unified file.
     assert format_signal_key(lf.signals[0]) in _saved_noise(ann)
 
@@ -161,7 +161,7 @@ def test_annotate_seeds_from_unified_events(fixtures_dir, tmp_path):
         _events.events_path_for(lf.fname), {"noise": {"signals": {key: [[0.4, 0.5]]}}}
     )
     ann = lf.view()
-    assert ann._ann[_addr0(lf)]["windows"] == [[0.4, 0.5]]
+    assert ann._ann[_addr0(lf)]["added"] == [[0.4, 0.5]]
 
 
 def test_annotate_renders_existing_windows_regardless_of_label(fixtures_dir, tmp_path):
@@ -174,7 +174,7 @@ def test_annotate_renders_existing_windows_regardless_of_label(fixtures_dir, tmp
     ann = lf.view()
     ann._current_idx = 0
     ann.update()
-    assert ann._ann[addr]["windows"] == [[0.02, 0.05]]
+    assert ann._ann[addr]["added"] == [[0.02, 0.05]]
     assert len(ann._overlay_artists) >= 1
     # Saving rewrites the key with the current label (self-heal).
     assert format_signal_key(lf.signals[0]) in _saved_noise(ann)
@@ -246,7 +246,7 @@ def test_markers_and_noise_coexist_in_one_file(fixtures_dir, tmp_path):
     doc = _events.read_events(path)["events"]
     assert "noise" in doc and "1" in doc
     # Both addressable / collapsible.
-    assert _events.read_noise_signals(path)[format_signal_key(lf.signals[0])]["windows"] == [
+    assert _events.read_noise_signals(path)[format_signal_key(lf.signals[0])]["added"] == [
         [0.02, 0.05]
     ]
     recs = _events.collapse_markers(path, "1")
@@ -279,7 +279,7 @@ def test_sensor_view_marks_panel_window(fixtures_dir, tmp_path):
     ann._mark_point(SimpleNamespace(inaxes=ax, xdata=0.05))
 
     saved = {key_address(k): v for k, v in _saved_noise(ann).items()}
-    assert saved[key_address(key)]["windows"] == [[0.02, 0.05]]
+    assert saved[key_address(key)]["added"] == [[0.02, 0.05]]
 
 
 def test_sensor_view_marks_typed_event(fixtures_dir, tmp_path):
@@ -345,10 +345,92 @@ def test_sensor_scope_marks_across_all_modalities(fixtures_dir, tmp_path):
     saved = {key_address(k): v for k, v in _saved_noise(ann).items()}
     for m in ann._markable_modalities(sensor):
         mk = key_address(ann._modality_key_for(sensor, m))
-        assert saved[mk]["windows"] == [[0.02, 0.05]]
+        assert saved[mk]["added"] == [[0.02, 0.05]]
 
 
 def test_view_invalid_kind_rejected(fixtures_dir, tmp_path):
     lf = _log(fixtures_dir, tmp_path)
     with pytest.raises(ValueError):
         lf.view("bogus")
+
+
+# ---------------------------------------------------------------------------
+# A detector's decision must survive an open -> edit -> save round trip
+# ---------------------------------------------------------------------------
+
+
+def test_annotator_preserves_a_detector_decision_through_open_and_save(fixtures_dir, tmp_path):
+    """The round trip the sidecar-level tests could not see.
+
+    ``_load_noise`` used to flatten a channel's decision into one window list, so merely opening
+    a detector-seeded file and saving it promoted every proposal to a human mark and dropped
+    every rejection -- making the ``default`` / ``added`` / ``removed`` split a no-op in the one
+    workflow it exists for.
+    """
+    lf = _log(fixtures_dir, tmp_path)
+    key = format_signal_key(lf.signals[0])
+    path = _events.events_path_for(lf.fname)
+    _events.write_events(path, {"noise": {"kind": "noise", "signals": {key: {
+        "default": [[0.10, 0.12], [0.20, 0.22]],
+        "removed": [[0.20, 0.22]],
+        "added": [[0.30, 0.32]],
+        "tags": ["reviewed"],
+        "algorithm_name": "bilateral-transient",
+        "params": {"threshold": 8.0},
+    }}}})
+
+    ann = lf.view()
+    ann._current_idx = 0
+    saved = _saved_noise(ann)[key]
+
+    assert saved["default"] == [[0.10, 0.12], [0.20, 0.22]], "proposals must not become marks"
+    assert saved["removed"] == [[0.20, 0.22]], "a rejection must survive a save"
+    assert saved["added"] == [[0.30, 0.32]]
+    assert saved["tags"] == ["reviewed"]
+    assert saved["algorithm_name"] == "bilateral-transient"
+
+
+def test_annotator_keeps_a_proposal_only_channel_on_save(fixtures_dir, tmp_path):
+    """``save()`` used to drop any channel whose only content was detector proposals."""
+    lf = _log(fixtures_dir, tmp_path)
+    key = format_signal_key(lf.signals[0])
+    _events.write_events(_events.events_path_for(lf.fname), {"noise": {"kind": "noise", "signals": {
+        key: {"default": [[0.10, 0.12]], "algorithm_name": "bilateral-transient"}}}})
+
+    ann = lf.view()
+    assert _saved_noise(ann)[key]["default"] == [[0.10, 0.12]]
+
+
+def test_rejecting_a_proposal_records_it_rather_than_deleting(fixtures_dir, tmp_path):
+    """``alt+n`` on a proposal moves it to ``removed``; on your own mark it just goes."""
+    lf = _log(fixtures_dir, tmp_path)
+    key = format_signal_key(lf.signals[0])
+    _events.write_events(_events.events_path_for(lf.fname), {"noise": {"kind": "noise", "signals": {
+        key: {"default": [[0.10, 0.12]], "added": [[0.30, 0.32]],
+              "algorithm_name": "bilateral-transient"}}}})
+    ann = lf.view()
+    ann._current_idx = 0
+    addr = _addr0(lf)
+
+    ann._remove_nearest(addr, 0.11)                 # nearest is the proposal
+    assert ann._ann[addr]["removed"] == [[0.10, 0.12]]
+    assert ann._ann[addr]["default"] == [[0.10, 0.12]], "the proposal itself stays on record"
+
+    ann._remove_nearest(addr, 0.31)                 # nearest is the human's own mark
+    assert ann._ann[addr]["added"] == []
+    assert ann._ann[addr]["removed"] == [[0.10, 0.12]], "deleting a mark adds no rejection"
+
+
+def test_undo_does_not_touch_a_detector_proposal(fixtures_dir, tmp_path):
+    lf = _log(fixtures_dir, tmp_path)
+    key = format_signal_key(lf.signals[0])
+    _events.write_events(_events.events_path_for(lf.fname), {"noise": {"kind": "noise", "signals": {
+        key: {"default": [[0.10, 0.12]], "algorithm_name": "bilateral-transient"}}}})
+    ann = lf.view()
+    ann._current_idx = 0
+    ann.add_window(0.30, 0.32)
+    ann.undo()
+
+    addr = _addr0(lf)
+    assert ann._ann[addr]["added"] == [], "undo drops the mark you just made"
+    assert ann._ann[addr]["default"] == [[0.10, 0.12]], "and leaves proposals alone"

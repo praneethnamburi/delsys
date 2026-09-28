@@ -64,6 +64,9 @@ _TAG_KEYS = {"1": "reviewed", "2": "representative", "3": "interesting"}
 def _build_rpeak_reviewer_class():
     """Build the reviewer class (``datanavigator`` imported here, lazily)."""
     import matplotlib.pyplot as plt
+    from delsys._util import require_datanavigator
+
+    require_datanavigator('the R-peak reviewer')
     from datanavigator.plots import PlotBrowser
 
     class RPeakReviewer(PlotBrowser):

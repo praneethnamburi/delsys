@@ -36,7 +36,7 @@ Interaction:
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -61,6 +61,9 @@ _SPLICE_ATTR = {
 
 def _build_clean_reviewer_class():
     """Build the reviewer class (``datanavigator`` imported here, lazily)."""
+    from delsys._util import require_datanavigator
+
+    require_datanavigator('the cleaning reviewer')
     from datanavigator.plots import PlotBrowser
 
     class CleanReviewer(PlotBrowser):

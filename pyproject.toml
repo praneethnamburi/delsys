@@ -35,6 +35,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The review/annotation UIs (``lf.view()``, ``EKG.review()``, ``clean_review``) are
+# datanavigator browsers. It is an EXTRA rather than a hard dependency because the core
+# loader -- including applying a saved noise track or R-peak decision on load -- runs in
+# headless batch sweeps, and ``import datanavigator`` currently costs ~1050 modules
+# including all of cv2 and av (its ``__init__`` eagerly imports ``.videos`` / ``._modals``).
+# Make it a hard dependency the moment that import gets cheap.
+review = ["datanavigator"]
 dev = [
     "pytest>=7",
     "pytest-cov",

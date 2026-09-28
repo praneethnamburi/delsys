@@ -410,7 +410,10 @@ class EKG(pysampled.Data):
         # Peak times are only meaningful with the clock they were measured on, so map them onto
         # THIS load's clock before doing anything with them (exact -- see _frame_convert).
         frame = decision.get("frame")
-        _cv = lambda xs: self._frame_convert(xs, frame)
+
+        def _cv(xs):
+            return self._frame_convert(xs, frame)
+
         self.meta["rpeaks_idx_added"] = self._times_to_sample_idx(_cv(decision.get("added", [])))
         human_removed = self._times_to_default_peak_idx(_cv(decision.get("removed", [])))
         self.meta["rpeaks_idx_removed"] = sorted(

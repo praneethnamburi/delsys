@@ -59,7 +59,7 @@ def test_write_read_roundtrip_mixed_types(tmp_path):
     ev = doc["events"]
     # noise canonicalized via _noise
     assert ev["noise"]["kind"] == "noise"
-    assert ev["noise"]["signals"]["3.EMGS | T"] == {"windows": [[1.0, 2.0]]}
+    assert ev["noise"]["signals"]["3.EMGS | T"] == {"added": [[1.0, 2.0]]}
     assert ev["noise"]["signals"]["9.FSR.C | F"] == {"dead": [[None, None]]}
     # markers keep kind + size
     assert ev["1"]["kind"] == "marker" and ev["1"]["size"] == 1
@@ -210,7 +210,7 @@ def test_noise_signals_for_falls_back_to_legacy(tmp_path):
     legacy_p = tmp_path / ("Trial_5" + SIDECAR_SUFFIX)
     write_noise_sidecar(str(legacy_p), {"9.FSR.C | F": [[5.0, 6.0]]})
     sigs = _events.noise_signals_for(str(events_p), str(legacy_p))
-    assert sigs["9.FSR.C | F"] == {"windows": [[5.0, 6.0]]}
+    assert sigs["9.FSR.C | F"] == {"added": [[5.0, 6.0]]}
 
 
 def test_migrate_noise_sidecar_folds_legacy(tmp_path):
@@ -219,7 +219,7 @@ def test_migrate_noise_sidecar_folds_legacy(tmp_path):
     write_noise_sidecar(str(legacy_p), {"9.FSR.C | F": [[5.0, 6.0]]})
     out = _events.migrate_noise_sidecar(str(legacy_p), str(events_p))
     assert out == str(events_p)
-    assert _events.read_noise_signals(str(events_p))["9.FSR.C | F"] == {"windows": [[5.0, 6.0]]}
+    assert _events.read_noise_signals(str(events_p))["9.FSR.C | F"] == {"added": [[5.0, 6.0]]}
 
 
 def test_migrate_noop_when_unified_noise_present(tmp_path):
@@ -303,7 +303,7 @@ def test_rpeaks_roundtrip_and_reserved_from_markers(tmp_path):
     assert chest["detector"] == {"name": "pn", "highpass": 5.0, "hr_max": 200.0}
     # rpeaks is reserved: not a marker type; noise + markers still round-trip.
     assert _events.marker_types(p) == ["1"]
-    assert _events.read_noise_signals(p) == {"5.EKG.A | Chest": {"windows": [[12.1, 12.4]]}}
+    assert _events.read_noise_signals(p) == {"5.EKG.A | Chest": {"added": [[12.1, 12.4]]}}
 
 
 def test_rpeaks_absent_returns_empty(tmp_path):
@@ -312,9 +312,9 @@ def test_rpeaks_absent_returns_empty(tmp_path):
     assert _events.read_rpeaks_signals(p) == {}
 
 
-def test_events_schema_is_2(tmp_path):
+def test_events_schema_is_3(tmp_path):
     import json
 
     p = str(tmp_path / ("Trial_3" + _events.EVENTS_SUFFIX))
     _events.write_events(p, {"rpeaks": {"signals": {"5.EKG.A | C": {"added": [1.0]}}}})
-    assert json.load(open(p))["schema"] == 2
+    assert json.load(open(p))["schema"] == 3

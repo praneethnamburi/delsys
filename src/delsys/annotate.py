@@ -43,6 +43,7 @@ from typing import Dict, List, Optional, Tuple
 from matplotlib import pyplot as plt
 
 from delsys import _event_types, _events, _noise
+from delsys._noise import _span_eq as _spans_equal
 from delsys._util import _mod_to_attr, _trim_location
 
 #: Sentinel span for a whole-recording dead channel (open both ends).
@@ -132,10 +133,21 @@ class _MarkingMixin:
         )
         ann: Dict[str, dict] = {}
         for key, val in signals.items():
-            windows, dead = _noise._normalize_signal_value(val)
-            slot = ann.setdefault(_noise.key_address(key), {"windows": [], "dead": []})
-            slot["windows"].extend([a, b] for a, b in windows)
-            slot["dead"].extend([a, b] for a, b in dead)
+            # Load the whole DECISION, not the flattened window set: collapsing default /
+            # removed into one list here would silently discard a detector's proposals and the
+            # rejections on the next save, which is the one thing the split exists to prevent.
+            rec = _noise._noise_record(val)
+            slot = ann.setdefault(
+                _noise.key_address(key),
+                {"default": [], "added": [], "removed": [], "dead": [],
+                 "tags": [], "algorithm_name": None, "params": {}})
+            for f in ("default", "added", "removed", "dead"):
+                slot[f].extend([a, b] for a, b in rec[f])
+            for t in rec["tags"]:
+                if t not in slot["tags"]:
+                    slot["tags"].append(t)
+            slot["algorithm_name"] = rec["algorithm_name"] or slot["algorithm_name"]
+            slot["params"] = rec["params"] or slot["params"]
         return ann
 
     def _load_markers(self) -> Dict[str, Dict[str, list]]:
@@ -164,7 +176,8 @@ class _MarkingMixin:
         noise_signals = {
             _noise.relabel_key(self._lf, addr): v
             for addr, v in self._ann.items()
-            if v.get("windows") or v.get("dead")
+            if any(v.get(f) for f in
+                   ("default", "added", "removed", "windows", "dead", "tags"))
         }
         if noise_signals:
             doc[_events.NOISE_TYPE] = {"signals": noise_signals}
@@ -309,19 +322,45 @@ class _MarkingMixin:
         a, b = float(min(a, b)), float(max(a, b))
         if b > a:
             for k in self._scope_keys(key):
-                self._slot(k)["windows"].append([a, b])
+                self._slot(k)["added"].append([a, b])
         self.update()
 
     def _slot(self, key: str) -> dict:
-        return self._ann.setdefault(key, {"windows": [], "dead": []})
+        """The channel's noise decision, in ``EventData`` fields (see :func:`delsys._noise`).
+
+        A human mark goes in ``added``; ``default`` holds whatever a detector proposed. Both are
+        created eagerly so callers can append without checking.
+        """
+        slot = self._ann.setdefault(
+            key, {"default": [], "added": [], "removed": [], "dead": []})
+        for f in ("default", "added", "removed", "dead"):
+            slot.setdefault(f, [])
+        return slot
 
     def _remove_nearest(self, key: str, x: float) -> None:
+        """Reject the window nearest ``x``.
+
+        Which of the two things that means depends on where it came from, exactly as in
+        ``datanavigator.events.EventData``: one of **your** marks is simply deleted, while a
+        **detector proposal** is moved to ``removed`` -- remembered as rejected, so re-running the
+        detector cannot quietly bring it back.
+        """
         for k in self._scope_keys(key):
             slot = self._ann.get(k)
-            windows = slot["windows"] if slot else []
-            if windows:
-                i = min(range(len(windows)), key=lambda i: abs(sum(windows[i]) / 2 - x))
-                windows.pop(i)
+            if not slot:
+                continue
+            added = slot.get("added") or []
+            default = [w for w in (slot.get("default") or [])
+                       if not any(_spans_equal(w, r) for r in (slot.get("removed") or []))]
+            pool = [("added", i, w) for i, w in enumerate(added)]
+            pool += [("default", i, w) for i, w in enumerate(default)]
+            if not pool:
+                continue
+            origin, i, win = min(pool, key=lambda e: abs(sum(e[2][:2]) / 2 - x))
+            if origin == "added":
+                added.pop(i)
+            else:
+                slot.setdefault("removed", []).append(list(win))
         self.update()
 
     def _toggle_dead(self, key: str) -> None:
@@ -334,10 +373,12 @@ class _MarkingMixin:
         self.update()
 
     def _drop_last(self, key: str) -> None:
+        """Undo the last window YOU placed. A detector proposal is not yours to undo -- reject
+        it with ``alt+n``, which records the rejection."""
         for k in self._scope_keys(key):
             slot = self._ann.get(k)
-            if slot and slot["windows"]:
-                slot["windows"].pop()
+            if slot and slot.get("added"):
+                slot["added"].pop()
         self.update()
 
     # -- noise track: cursor-driven keypress handlers ---------------------
@@ -450,12 +491,22 @@ class _MarkingMixin:
         self._overlay_artists = []
 
     def _draw_key_spans(self, ax, key: str, color: str) -> None:
-        """Shade one address's noise windows (``color``) + dead spans (hatched gray)."""
+        """Shade one address's noise windows (``color``) + dead spans (hatched gray).
+
+        A **detector proposal** draws dashed and paler than one of your own marks -- you are
+        confirming or rejecting those, so which is which has to be visible at a glance.
+        """
         slot = self._ann.get(key)
         if not slot:
             return
         x0, x1 = ax.get_xlim()
-        for a, b in slot.get("windows", []):
+        removed = slot.get("removed") or []
+        for a, b in (slot.get("default") or []):
+            if any(_spans_equal((a, b), r) for r in removed):
+                continue
+            self._overlay_artists.append(
+                ax.axvspan(a, b, alpha=0.12, color=color, ls="--", lw=1.0, ec=color))
+        for a, b in list(slot.get("added") or []) + list(slot.get("windows") or []):
             self._overlay_artists.append(ax.axvspan(a, b, alpha=0.2, color=color))
         for a, b in slot.get("dead", []):
             lo = x0 if a is None else a
@@ -487,6 +538,9 @@ class _MarkingMixin:
 
 def _build_signal_annotator_class():
     """Build the signal-centric annotator (datanavigator imported here, lazily)."""
+    from delsys._util import require_datanavigator
+
+    require_datanavigator('the signal annotator')
     from datanavigator.signals import SignalBrowser
 
     class SignalAnnotator(_MarkingMixin, SignalBrowser):
@@ -591,6 +645,9 @@ def _build_signal_annotator_class():
 
 def _build_sensor_annotator_class():
     """Build the sensor-centric annotator (datanavigator imported here, lazily)."""
+    from delsys._util import require_datanavigator
+
+    require_datanavigator('the sensor annotator')
     from datanavigator.plots import PlotBrowser
 
     class SensorAnnotator(_MarkingMixin, PlotBrowser):

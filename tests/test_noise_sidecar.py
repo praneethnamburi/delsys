@@ -135,9 +135,9 @@ def test_sidecar_io_roundtrip_and_shorthand(tmp_path):
     doc = read_noise_sidecar(str(p))
     assert doc["schema"] == SIDECAR_SCHEMA
     sigs = doc["signals"]
-    assert sigs["3.EMGS | T"] == {"windows": [[1.0, 2.0]]}
+    assert sigs["3.EMGS | T"] == {"added": [[1.0, 2.0]]}
     assert sigs["9.FSR.C | F"] == {"dead": [[None, None]]}
-    assert sigs["4.ACC | B"] == {"windows": [[0.5, 0.7]], "dead": [[3.0, None]]}
+    assert sigs["4.ACC | B"] == {"added": [[0.5, 0.7]], "dead": [[3.0, None]]}
 
 
 def test_normalize_signal_value_forms():

@@ -714,6 +714,17 @@ class Log:
 
         return launch_annotator(self, path, view=kind, events=events)
 
+    def detect_noise(self, **kwargs):
+        """Auto-detect artifact candidates for a human to refine -- see
+        :func:`delsys.detect_noise`.
+
+        Returns candidates without touching disk; pass ``write="noise"`` to seed the sidecar,
+        then refine in :meth:`view` (``alt+n`` removes a false positive).
+        """
+        from delsys._noise import detect_noise
+
+        return detect_noise(self, **kwargs)
+
     def annotate_noise(self, path: Optional[str] = None, view: str = "signal"):
         """Deprecated alias for :meth:`view` (kept for back-compat).
 

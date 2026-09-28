@@ -56,6 +56,7 @@ from delsys._util import _mod_to_attr as mod_to_attr
 from delsys._util import _modset_to_strlist as modset_to_strlist
 from delsys.cleaning import CleaningConfig, CleaningResult, CleaningSession
 from delsys.ekg import EKG
+from delsys._noise import detect_noise
 from delsys.emg import EMG, Reference, cocontraction, normalize, reference
 from delsys._clean import clean
 from delsys._process import process, read_channelmap
@@ -115,6 +116,7 @@ __all__ = [
     "EMG",
     "Reference",
     "cocontraction",
+    "detect_noise",
     "normalize",
     "reference",
     "EKG",

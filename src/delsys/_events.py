@@ -54,7 +54,7 @@ EVENTS_SUFFIX = ".delsys-events"
 #: Bump when the unified layout changes incompatibly. Schema 2 adds the
 #: ``"rpeaks"`` type (an older reader would misread its per-signal dict as a
 #: marker track — see :func:`marker_types`).
-EVENTS_SCHEMA = 2
+EVENTS_SCHEMA = 3
 
 #: The built-in quality track name.
 NOISE_TYPE = "noise"

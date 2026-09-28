@@ -332,3 +332,19 @@ def _aggregate_bundles(
     # default keep-agreeing/drop-conflicting warning on the per-part ``sensor``
     # key). A single part is a label-preserved clone, as before.
     return bundle_cls.merge_along_signal_name(parts, meta={"sensors": sensors_meta})
+
+
+def require_datanavigator(what: str):
+    """Import ``datanavigator`` for a review UI, or explain how to get it.
+
+    It is an optional extra (see ``pyproject.toml``), so a bare ImportError here reads as a
+    broken install rather than a missing extra -- which is what it looked like before this.
+    """
+    try:
+        import datanavigator  # noqa: F401
+    except ImportError as exc:  # pragma: no cover -- depends on the install
+        raise ImportError(
+            f"{what} needs the datanavigator browsers, which are an optional extra: "
+            "pip install 'delsys[review]'. The core loader (including applying a saved noise "
+            "track or R-peak decision) does not need them."
+        ) from exc

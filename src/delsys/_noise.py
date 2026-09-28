@@ -404,36 +404,98 @@ def _as_spans(seq) -> List[Tuple[Optional[float], Optional[float]]]:
     return out
 
 
-def _normalize_signal_value(val) -> Tuple[list, list]:
-    """Split a sidecar signal value into ``(windows, dead)`` span lists.
+def _span_eq(a, b, tol: float = 1e-6) -> bool:
+    """Whether two spans name the same interval, tolerant of JSON round-tripping."""
+    for x, y in zip(a, b):
+        if (x is None) != (y is None):
+            return False
+        if x is not None and abs(float(x) - float(y)) > tol:
+            return False
+    return True
 
-    Accepts:
-    - a bare list ``[[t0, t1], ...]`` — shorthand for windows-only;
-    - an object ``{"windows": [...], "dead": [...]}`` (both optional);
-    - ``"dead": true`` — sugar for one whole-extent dead span ``[None, None]``.
+
+def _noise_record(val) -> dict:
+    """One channel's noise track as a **decision**, in ``datanavigator.events.EventData`` fields.
+
+    ``default`` (what a detector proposed) / ``added`` (what a human marked) / ``removed`` (which
+    proposals the human rejected), plus ``tags`` and the ``algorithm_name`` + ``params`` that
+    produced ``default`` -- deliberately datanavigator's field names and meanings, not delsys
+    inventions, so the on-disk shape is already ``EventData.asdict()`` and can be handed to the
+    real class once importing it stops costing the video stack (see ``pyproject.toml``).
+
+    ``dead`` is the one delsys addition: a whole-recording kill has no counterpart in EventData.
+
+    Legacy shapes lift in rather than migrate: a bare ``[[t0, t1], ...]`` or a ``{"windows": ...}``
+    entry becomes ``added``, which is what it always meant -- every window in an existing sidecar
+    was placed by a human.
     """
     if isinstance(val, list):
-        return _as_spans(val), []
-    if isinstance(val, dict):
-        windows = _as_spans(val.get("windows"))
-        dead_raw = val.get("dead")
-        if dead_raw is True:
-            dead = [(None, None)]
-        else:
-            dead = _as_spans(dead_raw)
-        return windows, dead
-    return [], []
+        return {"default": [], "added": _as_spans(val), "removed": [], "tags": [],
+                "algorithm_name": None, "params": {}, "dead": []}
+    if not isinstance(val, dict):
+        return {"default": [], "added": [], "removed": [], "tags": [],
+                "algorithm_name": None, "params": {}, "dead": []}
+    added = _as_spans(val.get("added"))
+    for span in _as_spans(val.get("windows")):          # legacy alias
+        if not any(_span_eq(span, a) for a in added):
+            added.append(span)
+    dead_raw = val.get("dead")
+    return {
+        "default": _as_spans(val.get("default")),
+        "added": added,
+        "removed": _as_spans(val.get("removed")),
+        "tags": [str(t) for t in (val.get("tags") or [])],
+        "algorithm_name": (None if val.get("algorithm_name") is None
+                           else str(val["algorithm_name"])),
+        "params": dict(val.get("params") or {}),
+        "dead": [(None, None)] if dead_raw is True else _as_spans(dead_raw),
+    }
+
+
+def _effective_windows(rec: dict) -> list:
+    """``(default - removed) + added`` -- the windows that actually get masked.
+
+    Same rule as ``EventData``: a rejected proposal is remembered in ``removed`` rather than
+    deleted, so re-running the detector cannot resurrect it, and an ``added`` window has no
+    ``removed`` counterpart because deleting one just deletes it.
+    """
+    removed = rec.get("removed") or []
+    kept = [w for w in (rec.get("default") or [])
+            if not any(_span_eq(w, r) for r in removed)]
+    return kept + list(rec.get("added") or [])
+
+
+def _normalize_signal_value(val) -> Tuple[list, list]:
+    """Split a sidecar signal value into ``(effective windows, dead)`` span lists.
+
+    Accepts the decision form above and, unchanged, every shape that ever worked: a bare list
+    ``[[t0, t1], ...]``, ``{"windows": [...], "dead": [...]}``, and ``"dead": true`` as sugar for
+    one whole-extent dead span.
+    """
+    rec = _noise_record(val)
+    return _effective_windows(rec), rec["dead"]
 
 
 def _canonical_value(val) -> dict:
-    """Normalize a sidecar value to ``{"windows": [...], "dead": [...]}`` form,
-    omitting empty fields (used on write for stable, tidy output)."""
-    windows, dead = _normalize_signal_value(val)
+    """On-disk form of one channel's noise decision, dropping empty fields.
+
+    Every field survives the round-trip -- which is the point. The previous version flattened
+    whatever it was given down to ``{"windows", "dead"}``, so a detector's provenance, a human's
+    rejections, and a ``reviewed`` tag were all silently discarded on the next save.
+    """
+    rec = _noise_record(val)
     out: dict = {}
-    if windows:
-        out["windows"] = [[a, b] for a, b in windows]
-    if dead:
-        out["dead"] = [[a, b] for a, b in dead]
+    for key in ("default", "added", "removed"):
+        if rec[key]:
+            out[key] = [[a, b] for a, b in rec[key]]
+    if rec["dead"]:
+        out["dead"] = [[a, b] for a, b in rec["dead"]]
+    if rec["tags"]:
+        out["tags"] = list(rec["tags"])
+    if rec["algorithm_name"]:
+        out["algorithm_name"] = rec["algorithm_name"]
+    if rec["params"]:
+        out["params"] = dict(rec["params"])
     return out
 
 
@@ -517,3 +579,230 @@ def _rebuild_sensors(lf) -> None:
             info_by_num[si.number] = si
     order = [n for n in lf.sensor_numbers if n in info_by_num]
     lf.sensors = lf._signals_to_sensors([info_by_num[n] for n in order], lf.signals)
+
+
+# ---------------------------------------------------------------------------
+# Automatic noise-candidate detection
+# ---------------------------------------------------------------------------
+#: Recorded as ``algorithm_name`` on the proposals this detector writes, so a later run
+#: can tell its own ``default`` entries from another detector's.
+DETECTOR_NAME = "bilateral-transient"
+#: Defaults for :func:`detect_noise`, tuned on the pia02 emgmax takes against four
+#: hand-confirmed events (3 artifacts, 1 real maximal contraction; all four classified
+#: correctly, the artifacts ranking 1-2-3 of 25 candidates).
+DETECT_WIN_SIZE = 0.025       # envelope window: short, so a ~50 ms transient is resolved
+DETECT_BASELINE = 2.0         # seconds; the local level a transient is measured against
+DETECT_THRESHOLD = 8.0        # x the local level
+DETECT_SIDE_MIN = 2           # channels per side that must fire together
+DETECT_MERGE = 0.10           # seconds; gap below which two hits are one event
+DETECT_PAD = 0.05             # seconds added each side, since the tails fall below threshold
+
+
+def _detect_envelopes(lf, modality: str, win_size: float):
+    """Per-channel amplitude envelopes on ONE common time grid, with each channel's side.
+
+    The grid matters: a Quattro runs at 2222 Hz against a single-differential's 1259 Hz, and
+    :meth:`delsys.emg.EMG.rms` cannot deliver a requested rate exactly (its step is a whole
+    number of input samples), so the envelopes arrive on grids that differ in both rate and
+    ``t0``. Everything here is a cross-channel comparison, so they are interpolated onto the
+    first channel's grid before anything is compared.
+    """
+    import numpy as np
+
+    env, side, grid, sr = {}, {}, None, None
+    for sensor in getattr(lf, "sensors", []):
+        bundle = getattr(sensor, modality.lower(), None)
+        if bundle is None:
+            continue
+        singles = (bundle.split_by_signal_name() if bundle.n_signals() > 1 else [bundle])
+        for ch in singles:
+            name = (list(getattr(ch, "signal_names", None) or [None]) or [None])[0]
+            if name is None or not hasattr(ch, "rms"):
+                continue
+            v = ch.rms(win_size=win_size)
+            x = np.asarray(v()).reshape(-1)
+            t = np.asarray(v.t, dtype=float)
+            if grid is None:
+                grid, sr = t, float(v.sr)
+            env[name] = x if t.shape == grid.shape and np.allclose(t, grid) else np.interp(grid, t, x)
+            side[name] = getattr(getattr(ch, "sensor", None), "lrc", None)
+    return env, side, grid, sr
+
+
+def detect_noise(
+    lf,
+    *,
+    modality: str = "EMG",
+    win_size: float = DETECT_WIN_SIZE,
+    baseline: float = DETECT_BASELINE,
+    threshold: float = DETECT_THRESHOLD,
+    side_min: int = DETECT_SIDE_MIN,
+    merge: float = DETECT_MERGE,
+    pad: float = DETECT_PAD,
+    write: "str | None" = None,
+    path: "str | None" = None,
+):
+    """Find mechanical/electrical artifact candidates for a human to refine.
+
+    Two properties separate an artifact from a contraction, and **neither is amplitude** --
+    on a pia02 emgmax take a confirmed real contraction reached 121x the channel's median,
+    *higher* than one of the confirmed artifacts, so any absolute threshold classifies them
+    the same way:
+
+    1. **It is a transient against its own local level.** The baseline here is the median of
+       the surrounding ``baseline`` seconds, not of the whole take. A contraction ramps up and
+       lifts its own baseline, so it scores low; a 50 ms spike cannot, and scores 100-400x.
+       (A global median is useless on these files: most of a 15-minute take is rest, so the
+       global median *is* the rest level and every real contraction clears any multiple of it.)
+    2. **It crosses the body.** A gesture is one-sided -- during a confirmed left-hand
+       contraction every right-arm channel sat below 2x its median -- while a cable tug or a
+       bumped sensor lights up both arms at the same instant.
+
+    Detection is per **event**, not per channel, which is the point: one artifact hitting 16
+    channels is one row to review rather than 16 findings.
+
+    Args:
+        lf: A :class:`~delsys.log.Log`.
+        modality: Which modality to scan (``"EMG"``).
+        win_size: Envelope window, seconds. Short enough to resolve the transient.
+        baseline: Seconds of local context the excursion is measured against.
+        threshold: How many times the local level counts as hot.
+        side_min: Channels per side that must be hot simultaneously. The bilateral test needs
+            at least this many channels on each side to exist; when the montage is one-sided
+            it is skipped and a warning says so, leaving only the transient test.
+        merge: Hits closer than this are one event.
+        pad: Seconds added each side of an event, because the transient's tails fall below
+            threshold and a window that clips them still leaves part of the artifact in.
+        write: ``None`` to return candidates without touching disk (the default -- look first).
+            ``"noise"`` appends them to the sidecar's **noise** track for the affected channels
+            only, so ``lf.view("sensor")`` shows them and ``alt+n`` removes a false positive.
+            No schema change: a detected window is an ordinary ``windows`` entry -- which also
+            means that once written it is **indistinguishable from one you marked by hand**.
+        path: Sidecar path; defaults to the Log's own.
+
+    Returns:
+        Candidates, highest-scoring first. Each is a dict with ``t0``, ``t1``, ``dur``,
+        ``peak`` (the largest local-level multiple in the event), ``channels`` (the hot ones),
+        ``n_left`` / ``n_right``.
+
+    Example:
+        .. code-block:: python
+
+            lf = delsys.Log("Trial_1.h5")
+            for c in lf.detect_noise()[:10]:          # look before writing
+                print(f"{c['t0']:8.1f}s  {c['dur']*1000:5.0f} ms  {c['peak']:6.0f}x")
+            lf.detect_noise(write="noise")            # then seed the sidecar and refine
+            lf.view("sensor")
+    """
+    import warnings
+
+    import numpy as np
+
+    env, side, grid, sr = _detect_envelopes(lf, modality, win_size)
+    if not env:
+        return []
+    names = list(env)
+
+    # Local level, held over non-overlapping blocks: cheap, and a block median is exactly the
+    # "what is normal around here" that a transient has to stand out from.
+    w = max(1, int(round(baseline * sr)))
+    nb = max(1, len(grid) // w)
+    n = nb * w
+    ratio = np.empty((len(names), n), dtype=float)
+    for i, nm in enumerate(names):
+        x = env[nm][:n]
+        base = np.repeat(np.median(x.reshape(nb, w), axis=1), w)
+        ratio[i] = x / np.maximum(base, 1e-12)
+    t = grid[:n]
+
+    hot = ratio > float(threshold)
+    sides = np.array([side[nm] for nm in names])
+    n_left, n_right = hot[sides == "L"].sum(0), hot[sides == "R"].sum(0)
+    per_side = {s: int((sides == s).sum()) for s in ("L", "R")}
+    if min(per_side["L"], per_side["R"]) < side_min:
+        warnings.warn(
+            f"delsys.detect_noise: the bilateral test needs >= {side_min} {modality} channels "
+            f"per side but the montage has L={per_side['L']}, R={per_side['R']}; falling back to "
+            "the transient test alone, which cannot tell a brief artifact from a brief "
+            "contraction. Expect false positives.", RuntimeWarning, stacklevel=2)
+        keep = hot.sum(0) >= max(2, side_min)
+    else:
+        keep = (n_left >= side_min) & (n_right >= side_min)
+
+    idx = np.flatnonzero(keep)
+    if idx.size == 0:
+        return []
+    groups = np.split(idx, np.flatnonzero(np.diff(t[idx]) > merge) + 1)
+
+    out = []
+    for g in groups:
+        chans = [names[i] for i in np.flatnonzero(hot[:, g].any(axis=1))]
+        out.append(dict(
+            t0=float(t[g[0]] - pad), t1=float(t[g[-1]] + pad),
+            dur=float(t[g[-1]] - t[g[0]] + 2 * pad),
+            peak=float(ratio[:, g].max()), channels=chans,
+            n_left=int(n_left[g].max()), n_right=int(n_right[g].max()),
+        ))
+    out.sort(key=lambda c: -c["peak"])
+
+    if write == "noise":
+        _write_detected(lf, out, path, params=dict(
+            win_size=win_size, baseline=baseline, threshold=threshold,
+            side_min=side_min, merge=merge, pad=pad, modality=modality))
+    elif write is not None:
+        raise ValueError(f"unknown write target {write!r}; use None or 'noise'")
+    return out
+
+
+def _write_detected(lf, candidates, path=None, params=None) -> str:
+    """Write candidates as the noise track's ``default``, per channel.
+
+    ``default`` is **replaced wholesale**, which is the whole point of separating it from
+    ``added``: re-running the detector with different settings supersedes its own previous
+    proposals while leaving every human ``added`` window and every ``removed`` rejection intact.
+    A proposal the human already rejected stays rejected, because ``removed`` survives too.
+
+    Per channel rather than per sensor: the reason to detect at all is that a corrupted maximum
+    is per channel, and a narrow mark is easier to judge than a blanket one.
+    """
+    from delsys import _events
+
+    path = path or _events.events_path_for(lf.fname)
+    doc = _events.read_events(path)
+    events = doc.get("events", {})
+    section = events.get(_events.NOISE_TYPE) or {"kind": "noise", "signals": {}}
+    signals = {k: _noise_record(v) for k, v in (section.get("signals") or {}).items()}
+
+    # Keys come from the Log's Signal objects, which is what the annotator and the masking core
+    # both address by -- NOT from the EMG bundles the envelopes were computed on. A bundle has no
+    # modality/subchannel, so format_signal_key cannot key off one.
+    by_name = {}
+    for sig in (getattr(lf, "signals", None) or []):
+        try:
+            by_name[_signal_label(sig)] = format_signal_key(sig)
+        except Exception:  # noqa: BLE001 -- a signal whose label cannot be built is not addressable
+            continue
+    if not by_name:
+        raise ValueError(
+            "cannot write detected noise: the Log exposes no addressable signals, so a window "
+            "could not be keyed the way the annotator and the masking core read it")
+
+    fresh = {}
+    for cand in candidates:
+        for nm in cand["channels"]:
+            key = by_name.get(nm)
+            if key is not None:
+                fresh.setdefault(key, []).append([cand["t0"], cand["t1"]])
+    for key, spans in fresh.items():
+        rec = signals.setdefault(
+            key, {"default": [], "added": [], "removed": [], "tags": [],
+                  "algorithm_name": None, "params": {}, "dead": []})
+        rec["default"] = spans                       # supersede, do not accumulate
+        rec["algorithm_name"] = DETECTOR_NAME
+        rec["params"] = dict(params or {})
+    # a channel that USED to carry proposals and now has none must lose them too
+    for key, rec in signals.items():
+        if key not in fresh and rec.get("algorithm_name") == DETECTOR_NAME:
+            rec["default"] = []
+    events[_events.NOISE_TYPE] = {"kind": "noise", "signals": signals}
+    return _events.write_events(path, events)

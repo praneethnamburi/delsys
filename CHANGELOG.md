@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Automatic noise-candidate detection (`lf.detect_noise()` / `delsys.detect_noise`), reviewable
+  as a decision.** Finds mechanical/electrical artifacts for a human to refine, per **event**
+  rather than per channel -- one artifact hitting 16 channels is one row to review, not 16
+  findings. Neither test it applies is amplitude, because amplitude cannot separate them: on a
+  pia02 emgmax take a confirmed real contraction reached 121x its channel's median, *higher* than
+  a confirmed artifact. What works is (1) a **transient against the local level** -- the baseline
+  is the median of the surrounding 2 s, so a contraction lifts its own baseline and scores low
+  while a 50 ms spike scores 100-400x (a global median is useless: most of a 15-minute take is
+  rest, so it *is* the rest level and every real contraction clears any multiple of it), and
+  (2) **crossing the body** -- a gesture is one-sided, a cable tug lights up both arms. Validated
+  against four hand-confirmed events: the three artifacts ranked 1-2-3 of 25 candidates, the real
+  contraction was not flagged.
+- **The `noise` track is now a decision, in `datanavigator.events.EventData`'s fields**:
+  `default` (what a detector proposed) / `added` (what a human marked) / `removed` (proposals the
+  human rejected) / `tags` / `algorithm_name` / `params`, with
+  `effective = (default - removed) + added`. Deliberately datanavigator's field names and
+  meanings rather than delsys inventions, so the on-disk shape already *is* `EventData.asdict()`
+  and can be handed to the real class once importing it stops costing the video stack. The
+  `rpeaks` track has had `added`/`removed` all along; noise never got them, which was an
+  inconsistency rather than a decision -- and the reason a flat append looked natural and was
+  wrong: it loses provenance, a re-run duplicates windows, and a rejection leaves no record so
+  the next run resurrects it. `alt+n` is now origin-aware (rejects a proposal, deletes your own
+  mark), `undo` only touches your own, and a proposal draws dashed and paler than a mark.
+  **Schema 3, no migration**: a bare list and `{"windows": ...}` both lift into `added`, which is
+  what they always meant, and are rewritten on next save.
+
 - **Amplitude normalisation and the Rudolph co-contraction index (`reference`, `normalize`,
   `cocontraction`, `Reference`).** `cocontraction(a, b)` and `a.cocontraction(b)` both give
   `CCI = (lo/hi) * (lo + hi)` per sample (Rudolph et al. 2000,
@@ -77,6 +103,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`_canonical_value` silently dropped any field it did not recognise.** It rebuilt each noise
+  entry as `{"windows", "dead"}` on every write, so a detector's provenance, a human's
+  rejections, and a `reviewed` tag could not have survived a save -- which is why extending the
+  track looked like it needed a schema bump when the writer was the real obstacle.
+- **`delsys` imported `datanavigator` in four places and declared it nowhere.** `pip install
+  delsys` produced a package whose `lf.view()` died with a bare ImportError. Now a `review`
+  extra (`pip install 'delsys[review]'`) with `_util.require_datanavigator` raising an actionable
+  message at each site. An extra rather than a hard dependency because the core loader runs in
+  headless batch sweeps and `import datanavigator` currently costs ~1050 modules including all
+  of cv2 and av (its `__init__` eagerly imports `.videos` / `._modals`) -- make it hard the
+  moment that import gets cheap.
 - **The noise annotator no longer throws away your zoom on every mark, and gains the EKG
   reviewer's browsing.** Both views call `update()` after a mark, which clears and replots (the
   sensor view recreates its axes outright), so marking a window inside a 5 s zoom bounced the

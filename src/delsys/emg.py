@@ -697,9 +697,9 @@ def cocontraction(a, b, reference=INHERIT, min_activation: float = 0.0, **rms_kw
     balanced-and-loud.
 
     Rudolph et al. 2000, *Knee Surg Sports Traumatol Arthrosc* 8(5):262-269,
-    :doi:`10.1007/s001670000130`. Note that the published renderings of the formula are not
-    consistent across the secondary literature that cites it; this is the common form, but check it
-    against the primary paper before it carries a claim.
+    :doi:`10.1007/s001670000130`. The form above was checked against the primary paper (PN,
+    2026-09-28) -- worth recording, because the secondary literature citing it does not render the
+    formula consistently.
 
     **At rest the index is zero, and that is the limit, not a convention.** Because ``lo <= hi`` by
     construction the ratio lies in [0, 1], so ``CCI <= lo + hi``; as activation falls to zero the

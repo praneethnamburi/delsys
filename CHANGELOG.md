@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Amplitude normalisation and the Rudolph co-contraction index (`reference`, `normalize`,
   `cocontraction`, `Reference`).** `cocontraction(a, b)` and `a.cocontraction(b)` both give
   `CCI = (lo/hi) * (lo + hi)` per sample (Rudolph et al. 2000,
-  [doi:10.1007/s001670000130](https://doi.org/10.1007/s001670000130)). **At rest the index is
+  [doi:10.1007/s001670000130](https://doi.org/10.1007/s001670000130); formula verified against the
+  primary paper). **At rest the index is
   zero, and that is the limit rather than a convention**: `lo <= hi` bounds the ratio in [0, 1],
   so `CCI <= lo + hi` and the sum term drags it to zero as activation falls — only the `0/0` needs
   guarding.

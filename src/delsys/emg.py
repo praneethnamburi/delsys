@@ -522,6 +522,36 @@ def _reduce(env: np.ndarray, stat) -> float:
     raise ValueError(f"unknown reference stat {stat!r}; use 'max', 'pNN', or a percentile number")
 
 
+def _check_rms_kw(rms_kw, caller):
+    """Validate ``**rms_kw`` against :meth:`EMG.rms` before it is forwarded.
+
+    A ``**kwargs`` pass-through fails deep inside the callee with a message naming a function the
+    caller never invoked, and silently swallows a typo. Two cases are worth naming explicitly:
+    wrapping the settings in a dict (``rms_kw=dict(win_size=0.2)``) instead of passing them
+    directly, and ``normalize=True`` -- which would reduce a reference from an already-normalised
+    envelope, or normalise twice inside :func:`cocontraction`.
+    """
+    import inspect
+
+    allowed = [n for n, prm in inspect.signature(EMG.rms).parameters.items()
+               if n not in ("self", "normalize")]
+    if "rms_kw" in rms_kw:
+        raise TypeError(
+            f"{caller}() takes envelope settings directly, not wrapped in a dict -- write "
+            f"{caller}(..., win_size=0.2), not {caller}(..., rms_kw=dict(win_size=0.2))")
+    if "normalize" in rms_kw:
+        raise TypeError(
+            "reference() measures the reference FROM an unnormalised envelope; normalising first "
+            "would make it circular (every channel would come back at 1.0)"
+            if caller == "reference" else
+            "cocontraction() normalises internally; normalize= would apply it twice. Control it "
+            "with reference= instead -- omit to inherit, or pass None to stay unnormalised.")
+    unknown = [k for k in rms_kw if k not in allowed]
+    if unknown:
+        raise TypeError(f"{caller}() got unexpected envelope setting(s) {unknown}; "
+                        f"EMG.rms accepts {allowed}")
+
+
 def _rms_params(env) -> dict:
     """The envelope settings recorded on a processed signal, or ``{}`` if it carries none.
 
@@ -561,13 +591,16 @@ def reference(source, stat=REFERENCE_STAT, source_path: Optional[str] = None,
         stat: ``"max"``, ``"pNN"`` (e.g. ``"p99"``), or a percentile as a number.
         source_path: Recorded as the reference's provenance; taken from a Log's ``fname``
             when not given.
-        **rms_kw: Passed to :meth:`EMG.rms` (``win_size``, ``envelope_sr``, filter cutoffs).
-            Use the SAME settings here as in the analysis, or the normalisation is against a
-            differently-smoothed quantity.
+        **rms_kw: Envelope settings, passed straight through to :meth:`EMG.rms` --
+            ``win_size``, ``envelope_sr``, filter cutoffs. Give them **directly**, e.g.
+            ``reference(lf, win_size=0.2)``. Use the SAME settings here as in the analysis, or
+            the normalisation is against a differently-smoothed quantity (:func:`normalize`
+            warns if they disagree).
 
     Returns:
         A :class:`Reference` keyed by channel name.
     """
+    _check_rms_kw(rms_kw, "reference")
     if source_path is None:
         source_path = getattr(source, "fname", None)
     values, effective = {}, {}
@@ -693,7 +726,8 @@ def cocontraction(a, b, reference=INHERIT, min_activation: float = 0.0, **rms_kw
         min_activation: Force the index to 0 where the larger envelope is below this (in reference
             units, so a fraction when normalised). Default 0 -- the formula already tends to zero,
             so this is only for trimming a noisy baseline.
-        **rms_kw: Passed to :meth:`EMG.rms` for both channels.
+        **rms_kw: Envelope settings, passed straight through to :meth:`EMG.rms` for both
+            channels, e.g. ``cocontraction(a, b, win_size=0.2)``.
 
     Returns:
         A :class:`pysampled.Data` at ``envelope_sr``, unitless, ``meta["cocontraction"]`` recording
@@ -709,6 +743,7 @@ def cocontraction(a, b, reference=INHERIT, min_activation: float = 0.0, **rms_kw
       Sawers, *PLOS One* 2026, :doi:`10.1371/journal.pone.0343081`, which also confirms that
       amplitude-driven indices of this family go to zero when the antagonist is inactive).
     """
+    _check_rms_kw(rms_kw, "cocontraction")
     for ch, nm in ((a, "a"), (b, "b")):
         if ch is None or ch.n_signals() != 1:
             raise ValueError(f"cocontraction needs single-channel EMG; {nm} has "

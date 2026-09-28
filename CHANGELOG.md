@@ -76,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reference()` / `cocontraction()` validate `**rms_kw` instead of forwarding it blind.** A
+  pass-through `**kwargs` fails deep inside the callee naming a function the caller never invoked,
+  and swallows typos. Three cases now raise at the call site: settings wrapped in a dict
+  (`rms_kw=dict(win_size=0.2)` -- they go directly, `reference(lf, win_size=0.2)`), an
+  unrecognised name, and `normalize=True`, which would have measured a reference from an already
+  normalised envelope (circular -- every channel returns 1.0) or normalised twice inside
+  `cocontraction`.
 - **`EMG.rms(envelope_sr=...)` never actually delivered the requested rate, and the docstring said
   it did.** The window step must be a whole number of input samples, so `pysampled` returns
   `sr / round(sr / envelope_sr)`: a request for 240 Hz gives **251.9 Hz** on a 1259 Hz

@@ -197,3 +197,32 @@ def test_cocontraction_records_native_rates(pair):
     assert meta["channels"] == ["flexor", "extensor"]
     assert meta["native_sr"] == [pytest.approx(1259.259, rel=1e-4),
                                  pytest.approx(2222.222, rel=1e-4)]
+
+
+# ---------------------------------------------------------------------------
+# **rms_kw is a pass-through, so it has to reject what it cannot forward
+# ---------------------------------------------------------------------------
+
+
+def test_rms_kw_must_be_passed_directly_not_wrapped(pair):
+    with pytest.raises(TypeError, match="not wrapped in a dict"):
+        reference(pair[0], rms_kw=dict(win_size=0.2))
+
+
+def test_rms_kw_rejects_a_typo(pair):
+    with pytest.raises(TypeError, match=r"unexpected envelope setting\(s\) \['winsize'\]"):
+        reference(pair[0], winsize=0.2)
+
+
+def test_reference_rejects_normalize(pair):
+    with pytest.raises(TypeError, match="circular"):
+        reference(pair[0], normalize=True)
+
+
+def test_cocontraction_rejects_normalize(pair):
+    with pytest.raises(TypeError, match="apply it twice"):
+        cocontraction(*pair, normalize=True)
+
+
+def test_rms_kw_still_forwards_valid_settings(pair):
+    assert reference(pair[0], win_size=0.2).rms_kw["win_size"] == 0.2

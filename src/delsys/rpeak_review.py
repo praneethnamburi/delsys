@@ -278,7 +278,16 @@ def _build_rpeak_reviewer_class():
                 return
             if nearest in added:
                 ch.meta["rpeaks_idx_added"] = [a for a in added if a != nearest]
-                print(f"  undo added peak @ {float(ch.t[nearest]):.3f}s")
+                if nearest in set(default):
+                    # A restored auto-pruned peak sits in BOTH added and default (one beat, two
+                    # markers). Dropping only the "added" entry left the beat in place -- `d`
+                    # looked like it did nothing, and the next save re-recorded it as added.
+                    ch.meta.setdefault("rpeaks_idx_removed", [])
+                    if nearest not in ch.meta["rpeaks_idx_removed"]:
+                        ch.meta["rpeaks_idx_removed"].append(nearest)
+                    print(f"  - peak @ {float(ch.t[nearest]):.3f}s (restored auto-prune removed)")
+                else:
+                    print(f"  undo added peak @ {float(ch.t[nearest]):.3f}s")
             else:
                 ch.meta.setdefault("rpeaks_idx_removed", [])
                 if nearest not in ch.meta["rpeaks_idx_removed"]:

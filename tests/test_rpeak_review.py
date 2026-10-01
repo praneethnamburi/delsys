@@ -204,3 +204,21 @@ def test_nav_review_window_restricts_targets(tmp_path):
     ekg.meta["rpeaks_idx_added"] = [int(round(t * ekg.sr)) for t in (3.0, 15.0, 25.0)]
     ekg.meta["review_window"] = (10.0, 20.0)
     assert [t for t, _ in r._targets(ekg)] == [pytest.approx(15.0)]
+
+
+def test_remove_on_restored_autopruned_peak_removes_the_beat(tmp_path):
+    """A restored auto-prune is in BOTH added and default; `d` on it must remove the beat, and
+    the removal must survive save + reload (it used to be re-recorded as added)."""
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    r = ekg.review()
+    ch = r._cur()
+    beat = ch.meta["rpeaks_idx_default"][7]
+    ch.meta["rpeaks_idx_added"] = [beat]                 # the restored-auto-prune shape
+    r._remove_rpeak(_Ev(float(ch.t[beat])))
+    assert beat not in ch._get_rpeaks_from_meta()
+    r.save()
+    again = _synth_ekg()
+    again.meta["source"] = ekg.meta["source"]
+    again.load_rpeaks()
+    assert beat not in again._get_rpeaks_from_meta()

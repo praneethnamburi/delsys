@@ -166,3 +166,41 @@ def test_review_has_help_button(tmp_path):
     r = ekg.review()
     assert "Help (ctrl+k)" in r.buttons
     assert callable(getattr(r, "show_key_bindings", None))
+
+
+def test_nav_added_steps_through_added_peaks_and_rolls_across_channels(tmp_path):
+    """nav='added': w visits each added peak in order, rolls over to the next channel that has
+    any (skipping one that has none), keeps the zoom; q walks back across the boundary."""
+    a = _synth_ekg(number=1, seed=1)
+    empty = _synth_ekg(number=2, seed=2)
+    b = _synth_ekg(number=3, seed=3)
+    for i, ch in enumerate((a, empty, b)):
+        ch.meta["source"] = str(tmp_path / f"Trial_{i}.h5")
+    from delsys import rpeak_review
+
+    r = rpeak_review.launch([a, empty, b], nav="added")
+    for ch, ts in ((a, (5.0, 12.0)), (b, (8.0,))):
+        ch.meta["rpeaks_idx_added"] = [int(round(t * ch.sr)) for t in ts]
+    r._ax_raw.set_xlim(0.0, 2.0)                      # a 2 s zoom, centred at 1 s
+    visits = []
+    for _ in range(3):
+        r._jump_suspect(+1)
+        lo, hi = r._ax_raw.get_xlim()
+        visits.append((r._current_idx, round((lo + hi) / 2, 2), round(hi - lo, 2)))
+    assert visits == [(0, 5.0, 2.0), (0, 12.0, 2.0), (2, 8.0, 2.0)]   # skipped the empty one
+    r._jump_suspect(+1)                                # end of list: stays put
+    assert r._current_idx == 2
+    r._jump_suspect(-1)                                # back across the boundary to a's LAST
+    lo, hi = r._ax_raw.get_xlim()
+    assert r._current_idx == 0 and round((lo + hi) / 2, 2) == 12.0
+
+
+def test_nav_review_window_restricts_targets(tmp_path):
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    from delsys import rpeak_review
+
+    r = rpeak_review.launch([ekg], nav="added")
+    ekg.meta["rpeaks_idx_added"] = [int(round(t * ekg.sr)) for t in (3.0, 15.0, 25.0)]
+    ekg.meta["review_window"] = (10.0, 20.0)
+    assert [t for t, _ in r._targets(ekg)] == [pytest.approx(15.0)]

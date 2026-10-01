@@ -40,7 +40,10 @@ Controls (keys mirrored by buttons where noted):
 Browsing (all left-hand, so the pointing hand never leaves the mouse):
 
 - **w** / **q** — jump to the next / previous *suspect* and centre it, keeping the
-  current zoom. Suspects come from :meth:`~delsys.ekg.EKG.suspect_times` — an RR out of
+  current zoom. Past the last one on a channel it rolls over to the next channel that has
+  any (``q``: the previous one, landing on its last). ``launch(..., nav="added")`` steps
+  through human-added peaks instead -- the audit pass for interpolated beats -- and
+  ``meta["review_window"] = (t0, t1)`` restricts either mode to a span. Suspects come from :meth:`~delsys.ekg.EKG.suspect_times` — an RR out of
   range, a missed-beat-like gap, a premature-beat signature, or an existing ectopic
   label. This is the browsing that matters: a long record is ~60 screens at QRS zoom and
   only a handful are worth looking at, so travel between them rather than past them.
@@ -56,6 +59,9 @@ stays dnav-free.
 from typing import List, Optional
 
 import numpy as np
+
+#: What ``w`` / ``q`` step through (see ``RPeakReviewer._targets``).
+_NAV_MODES = ("suspects", "added")
 
 #: Tag names bound to the digit keys 1 / 2 / 3.
 _TAG_KEYS = {"1": "reviewed", "2": "representative", "3": "interesting"}
@@ -78,11 +84,15 @@ def _build_rpeak_reviewer_class():
             channels: List,
             path: Optional[str] = None,
             figure_handle=None,
+            nav: str = "suspects",
         ) -> None:
             if not channels:
                 raise ValueError("RPeakReviewer needs at least one EKG channel.")
+            if nav not in _NAV_MODES:
+                raise ValueError(f"nav must be one of {_NAV_MODES}, got {nav!r}")
             self._channels = list(channels)
             self._events_path = path
+            self._nav = nav
             # Snap / match windows (seconds) around the cursor.
             self._win_add = (-0.025, 0.025)
             self._win_remove = (-0.10, 0.10)
@@ -292,17 +302,36 @@ def _build_rpeak_reviewer_class():
             plt.draw()
             self.update_without_clear()
 
+        def _targets(self, ch) -> List[tuple]:
+            """``[(time, reason), ...]`` that ``w``/``q`` visit on ``ch``, per the nav mode.
+
+            ``"suspects"``: :meth:`~delsys.ekg.EKG.suspect_times`. ``"added"``: every
+            human-added peak -- the audit pass for interpolated / hand-placed beats. A
+            ``meta["review_window"] = (t0, t1)`` on the channel restricts either to that span.
+            """
+            if self._nav == "added":
+                t = np.asarray(ch.t)
+                out = [(float(t[int(i)]), "added") for i in sorted(ch.meta.get("rpeaks_idx_added", []))]
+            else:
+                out = list(ch.suspect_times())
+            win = (ch.meta or {}).get("review_window")
+            if win is not None:
+                out = [(x, r) for x, r in out if win[0] <= x <= win[1]]
+            return out
+
         def _jump_suspect(self, step: int) -> None:
-            """Centre the next (``+1``) / previous (``-1``) suspect at the current zoom."""
+            """Centre the next (``+1``) / previous (``-1``) target at the current zoom.
+
+            Past the last (first) target on this channel, roll over to the next (previous)
+            channel that has any and land on its first (last) one -- so a whole review is one
+            key, at one zoom.
+            """
             span = self._xspan()
             if span is None:
                 return
             here = 0.5 * (span[0] + span[1])
-            sus = self._cur().suspect_times()
-            if not sus:
-                print("  no suspects on this channel")
-                return
-            times = [t for t, _r in sus]
+            tg = self._targets(self._cur())
+            times = [t for t, _r in tg]
             if step > 0:
                 cand = [i for i, t in enumerate(times) if t > here + 1e-6]
                 j = cand[0] if cand else None
@@ -310,11 +339,20 @@ def _build_rpeak_reviewer_class():
                 cand = [i for i, t in enumerate(times) if t < here - 1e-6]
                 j = cand[-1] if cand else None
             if j is None:
-                print(f"  no {'further' if step > 0 else 'earlier'} suspects "
-                      f"({len(times)} total)")
-                return
-            t, reason = sus[j]
-            print(f"  suspect {j + 1}/{len(times)}: {reason} @ {t:.3f}s")
+                k = self._current_idx + step
+                while 0 <= k < len(self._channels) and not self._targets(self._channels[k]):
+                    k += step
+                if not 0 <= k < len(self._channels):
+                    print(f"  no {'further' if step > 0 else 'earlier'} {self._nav} "
+                          f"-- {'end' if step > 0 else 'start'} of the list")
+                    return
+                self._current_idx = k
+                self.update()          # redraws the new channel; update() keeps the span
+                tg = self._targets(self._cur())
+                j = 0 if step > 0 else len(tg) - 1
+                print(f"  -> {self._label(self._cur())}")
+            t, reason = tg[j]
+            print(f"  {reason} {j + 1}/{len(tg)} @ {t:.3f}s")
             self._centre_on(t)
 
         def _toggle_ectopic(self, event=None) -> None:
@@ -483,7 +521,7 @@ def _build_rpeak_reviewer_class():
                 0.008, 0.004,
                 "a add  ·  d remove  ·  e ectopic  ·  n noise(2 presses)  ·  f flip+redetect  ·  "
                 "m mode  ·  alt+e re-detect ectopics  ·  1/2/3 tag  ·  s save\n"
-                "w/q next/prev suspect  ·  ctrl+g / ctrl+t pan 20% / 1 screen "
+                "w/q next/prev target (rolls across channels)  ·  ctrl+g / ctrl+t pan 20% / 1 screen "
                 "(+shift = left)        Help button / ctrl+k = full list",
                 fontsize=7.5, family="monospace", color="0.4", va="bottom",
             )
@@ -531,7 +569,12 @@ def _build_rpeak_reviewer_class():
     return RPeakReviewer
 
 
-def launch(channels: List, path: Optional[str] = None, figure_handle=None):
-    """Build and show the reviewer over ``channels`` (returns the instance)."""
+def launch(channels: List, path: Optional[str] = None, figure_handle=None,
+           nav: str = "suspects"):
+    """Build and show the reviewer over ``channels`` (returns the instance).
+
+    ``nav`` picks what ``w`` / ``q`` step through: ``"suspects"`` (default) or ``"added"``
+    (every human-added peak). Either rolls over from channel to channel.
+    """
     cls = _build_rpeak_reviewer_class()
-    return cls(channels, path=path, figure_handle=figure_handle)
+    return cls(channels, path=path, figure_handle=figure_handle, nav=nav)

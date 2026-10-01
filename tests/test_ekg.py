@@ -310,3 +310,50 @@ def test_rpeaks_decision_raises_on_multi_channel():
     agg = _two_channel_ekg()
     with pytest.raises(NotImplementedError):
         agg.rpeaks_decision()
+
+
+def _ekg_with_forced_double(monkeypatch, sr=200, seed=3):
+    """Real detection plus one injected double peak 50 ms after the 8th beat, so the
+    detector's own prune fires on a known sample."""
+    import delsys.ekg as ekg_mod
+
+    real = ekg_mod.hp.process
+
+    def with_double(x, fs, *a, **k):
+        wd, m = real(x, fs, *a, **k)
+        pl = list(wd["peaklist"])
+        pl.insert(9, pl[8] + int(0.05 * fs))
+        wd = dict(wd)
+        wd["peaklist"] = pl
+        return wd, m
+
+    monkeypatch.setattr(ekg_mod.hp, "process", with_double)
+    sig = nk.ecg_simulate(duration=30, sampling_rate=sr, heart_rate=70, random_state=seed)
+    ekg = _fresh_ekg(sig, sr)
+    ekg.find_rpeaks()
+    assert len(ekg.meta["rpeaks_idx_autopruned"]) == 1
+    return sig, ekg
+
+
+def test_restored_autopruned_peak_survives_the_decision_roundtrip(monkeypatch):
+    """Reviewer `a` on an auto-pruned peak restores it by dropping it from `removed`; the
+    decision must carry that, or a replay re-prunes it."""
+    sr = 200
+    sig, ekg = _ekg_with_forced_double(monkeypatch, sr)
+    pruned = ekg.meta["rpeaks_idx_autopruned"][0]
+    ekg.meta["rpeaks_idx_removed"] = [r for r in ekg.meta["rpeaks_idx_removed"] if r != pruned]
+    expected = sorted(ekg._get_rpeaks_from_meta())
+    assert pruned in expected
+    again = _fresh_ekg(sig, sr).apply_rpeaks_decision(ekg.rpeaks_decision())
+    assert sorted(again) == expected
+
+
+def test_added_peak_is_never_autopruned_on_replay(monkeypatch):
+    """A peak that is both re-detected-and-pruned and explicitly added stays in."""
+    sr = 200
+    sig, ekg = _ekg_with_forced_double(monkeypatch, sr)
+    pruned = ekg.meta["rpeaks_idx_autopruned"][0]
+    dec = ekg.rpeaks_decision()
+    dec["added"] = list(dec["added"]) + [float(ekg.t[pruned])]
+    again = _fresh_ekg(sig, sr).apply_rpeaks_decision(dec)
+    assert pruned in again

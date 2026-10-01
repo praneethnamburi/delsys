@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`EKG.nn_intervals()` and `EKG.rmssd()` — the downstream half of ectopic labelling.**
+  Labels existed but nothing consumed them, so every HRV index was still computed on raw
+  peak-to-peak intervals. `nn_intervals(t_start, t_end)` returns `(t, rr, ok)`: an interval is
+  not NN when either bounding beat is labelled ectopic (the premature interval *and* its
+  compensatory pause) or when it spans a noisy segment (previously `np.diff` over
+  `rpeak_times()` silently turned the gap into one long "beat"). `rmssd()` uses a successive
+  difference only when both intervals are NN and consecutive — the exclusion approach: no beat
+  is invented, the corrupted differences are simply not counted.
+
 - **Automatic noise-candidate detection (`lf.detect_noise()` / `delsys.detect_noise`), reviewable
   as a decision.** Finds mechanical/electrical artifacts for a human to refine, per **event**
   rather than per channel -- one artifact hitting 16 channels is one row to review, not 16
@@ -103,6 +112,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A restored auto-pruned R-peak was dropped again on reload.** The reviewer's `a` near an
+  auto-pruned peak restores it by dropping it from `removed`, but the decision had no way to
+  say so: `rpeaks_decision()` stored only human removals, and `apply_rpeaks_decision()`
+  regenerated the prune and removed the peak again. Now a restored auto-prune is recorded as
+  an addition, and replay never auto-prunes an added peak. Found migrating gib01's curation:
+  one trial's RMSSD went 8.3 → 35.2 ms through the round trip before the fix.
 - **`_canonical_value` silently dropped any field it did not recognise.** It rebuilt each noise
   entry as `{"windows", "dead"}` on every write, so a detector's provenance, a human's
   rejections, and a `reviewed` tag could not have survived a save -- which is why extending the

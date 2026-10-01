@@ -353,6 +353,10 @@ class EKG(pysampled.Data):
             set(self.meta.get("rpeaks_idx_removed", []))
             - set(self.meta.get("rpeaks_idx_autopruned", []))
         )
+        # An auto-pruned peak the human put back (reviewer `a` restores it by dropping it from
+        # `removed`) is human intent too: record it as an addition, or a replay re-prunes it.
+        restored = set(self.meta.get("rpeaks_idx_autopruned", [])) - set(self.meta.get("rpeaks_idx_removed", []))
+        added_all = sorted(set(self.meta.get("rpeaks_idx_added", [])) | restored)
         return {
             "detector": dict(det),
             # The time FRAME the decision was written in. Peak times are only portable across
@@ -361,7 +365,7 @@ class EKG(pysampled.Data):
             # apply_rpeaks_decision say so out loud instead.
             "frame": {"t0": float(t[0]),
                       "clock_mul": float((self.meta or {}).get("clock_mul", 1.0) or 1.0)},
-            "added": [float(t[i]) for i in self.meta.get("rpeaks_idx_added", [])],
+            "added": [float(t[i]) for i in added_all],
             "removed": [float(t[i]) for i in human_removed],
             "ectopic": [float(t[i]) for i in self.meta.get("rpeaks_idx_ectopic", [])],
             "flipped": bool(self.meta.get("is_flipped", False)),
@@ -416,8 +420,10 @@ class EKG(pysampled.Data):
 
         self.meta["rpeaks_idx_added"] = self._times_to_sample_idx(_cv(decision.get("added", [])))
         human_removed = self._times_to_default_peak_idx(_cv(decision.get("removed", [])))
+        # an added peak is never auto-pruned: re-adding a pruned peak is exactly what the human meant
         self.meta["rpeaks_idx_removed"] = sorted(
-            set(self.meta.get("rpeaks_idx_removed", [])) | set(human_removed)
+            (set(self.meta.get("rpeaks_idx_removed", [])) - set(self.meta["rpeaks_idx_added"]))
+            | set(human_removed)
         )
         if noise_windows:
             # interval bounds are times too, and have the identical frame problem
@@ -592,6 +598,57 @@ class EKG(pysampled.Data):
         for i in self.meta.get("rpeaks_idx_ectopic", []):
             out[float(self.t[int(i)])] = "labelled"
         return sorted(out.items())
+
+    def nn_intervals(self, t_start: Optional[float] = None,
+                     t_end: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Inter-beat intervals with a validity mask -- the input every HRV index should use.
+
+        An interval is **not** normal-to-normal (``ok=False``) when either of its bounding beats
+        is labelled ectopic (so the premature interval *and* its compensatory pause both drop
+        out) or when it spans a noisy segment (its bounding peaks are not adjacent in the
+        curated peak list, so the "interval" is a gap, not a heartbeat). Excluded intervals are
+        reported rather than deleted, so a consumer can never difference across a hole by
+        accident -- see :meth:`rmssd`.
+
+        Args:
+            t_start: keep only intervals whose **both** bounding peaks are at or after this time.
+            t_end: ... and at or before this time. ``None`` means unbounded.
+
+        Returns:
+            ``(t, rr, ok)``: the time (s) of each interval's closing peak, the interval
+            length (s), and the boolean NN mask. All three are aligned.
+        """
+        x, pk_idx = self.rpeak_times()
+        t_pk = np.asarray(self.t)[x]
+        if t_pk.size < 2:
+            return np.empty(0), np.empty(0), np.empty(0, dtype=bool)
+        ect = set(int(i) for i in self.meta.get("rpeaks_idx_ectopic", []))
+        is_ect = np.array([int(i) in ect for i in x], dtype=bool)
+        rr = np.diff(t_pk)
+        ok = (np.diff(pk_idx) == 1) & ~is_ect[:-1] & ~is_ect[1:]
+        keep = np.ones(rr.size, dtype=bool)
+        if t_start is not None:
+            keep &= t_pk[:-1] >= t_start
+        if t_end is not None:
+            keep &= t_pk[1:] <= t_end
+        return t_pk[1:][keep], rr[keep], ok[keep]
+
+    def rmssd(self, t_start: Optional[float] = None, t_end: Optional[float] = None) -> float:
+        """Root mean square of successive NN-interval differences, in **ms**.
+
+        A successive difference is used only when both intervals are NN (:meth:`nn_intervals`)
+        and they are consecutive beats -- never across an excluded interval. This is the
+        exclusion approach to ectopic correction: no beat is invented, the differences an
+        ectopic or a gap would corrupt are simply not counted. ``nan`` if none survive.
+        """
+        _, rr, ok = self.nn_intervals(t_start, t_end)
+        if rr.size < 2:
+            return float("nan")
+        pair_ok = ok[:-1] & ok[1:]
+        if not pair_ok.any():
+            return float("nan")
+        d = np.diff(rr * 1000.0)[pair_ok]
+        return float(np.sqrt(np.mean(d ** 2)))
 
     def _windows_to_idx_pairs(self, windows: List[List[float]]) -> List[List[int]]:
         """Convert ``[[t0, t1], ...]`` noise windows to ``[[i0, i1], ...]`` pairs."""

@@ -449,7 +449,17 @@ def _build_rpeak_reviewer_class():
                 contiguous = np.diff(np.asarray(pk_idx, dtype=int)) == 1
                 ibi = np.where(contiguous, ibi, np.nan)
                 ax_ibi.plot(rt[1:], ibi, "o-", ms=3, color="C0")
-                real = ibi[np.isfinite(ibi)]
+                # The two intervals an ectopic beat bounds stay on the trace (the beat happened)
+                # but are circled: they are what EKG.nn_intervals / EKG.rmssd leave out. Without
+                # this, labelling a beat gives no visible feedback at all.
+                ect = set(int(i) for i in ch.meta.get("rpeaks_idx_ectopic", []))
+                is_ect = np.array([int(i) in ect for i in clean_idx], dtype=bool)
+                excl = (is_ect[:-1] | is_ect[1:]) & contiguous
+                if excl.any():
+                    ax_ibi.plot(rt[1:][excl], ibi[excl], "o", ms=8, mfc="none", mec="red",
+                                mew=1.5, label="excluded from HRV (ectopic)")
+                    ax_ibi.legend(loc="upper right", fontsize=7)
+                real = ibi[np.isfinite(ibi) & ~excl]   # histogram = NN intervals only
                 if real.size:
                     ax_hist.hist(real, bins=30, color="C2")
             ax_ibi.set_ylabel("IBI (ms)")

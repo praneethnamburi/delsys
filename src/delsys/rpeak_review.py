@@ -507,14 +507,20 @@ def _build_rpeak_reviewer_class():
             ``<stem>.delsys-events``; other sections are preserved. Returns the
             written path (``None`` if no channel has a source to key on).
             """
-            path = None
+            path, written = None, set()
             for ch in self._channels:
                 try:
                     path = ch.save_rpeaks(self._events_path)
+                    written.add(path)
                 except ValueError as exc:  # no source on this channel
                     print(f"delsys EKG review: {exc}")
                     return None
-            if path:
+            # Every open channel is written, not just the one on screen -- say so, or the message
+            # (which used to name only the LAST path) reads as "only this trial was saved".
+            if len(written) > 1:
+                print(f"delsys EKG review: saved all {len(self._channels)} open channels "
+                      f"({len(written)} files) -- e.g. {path}")
+            elif path:
                 print(f"delsys EKG review: saved -> {path}")
             return path
 

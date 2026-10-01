@@ -293,6 +293,10 @@ def _build_rpeak_reviewer_class():
                 if nearest not in ch.meta["rpeaks_idx_removed"]:
                     ch.meta["rpeaks_idx_removed"].append(nearest)
                 print(f"  - peak @ {float(ch.t[nearest]):.3f}s")
+            # a removed beat cannot be ectopic; a stale label kept drawing a circle on nothing
+            if nearest not in ch._get_rpeaks_from_meta():
+                ch.meta["rpeaks_idx_ectopic"] = [e for e in ch.meta.get("rpeaks_idx_ectopic", [])
+                                                 if e != nearest]
             self.update()
 
         def _xspan(self):

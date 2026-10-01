@@ -222,3 +222,15 @@ def test_remove_on_restored_autopruned_peak_removes_the_beat(tmp_path):
     again.meta["source"] = ekg.meta["source"]
     again.load_rpeaks()
     assert beat not in again._get_rpeaks_from_meta()
+
+
+def test_remove_clears_the_ectopic_label_of_the_removed_beat(tmp_path):
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    r = ekg.review()
+    ch = r._cur()
+    beat = ch.meta["rpeaks_idx_default"][7]
+    ch.meta["rpeaks_idx_ectopic"] = [beat]
+    r._remove_rpeak(_Ev(float(ch.t[beat])))
+    assert beat not in ch._get_rpeaks_from_meta()
+    assert beat not in ch.meta["rpeaks_idx_ectopic"]

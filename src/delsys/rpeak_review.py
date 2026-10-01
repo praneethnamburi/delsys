@@ -63,6 +63,19 @@ import numpy as np
 #: What ``w`` / ``q`` step through (see ``RPeakReviewer._targets``).
 _NAV_MODES = ("suspects", "added")
 
+def _placed(ch) -> List[int]:
+    """Added peaks that a human actually PLACED -- excluding restored auto-prunes.
+
+    A beat the detector found but its own double-peak prune dropped (a premature beat < 300 ms
+    after the previous one trips the 200 bpm guard) can only be kept by listing it in
+    ``added``: every reload re-runs the detector, re-prunes it, and ``added`` puts it back. So
+    it sits in both ``default`` and ``added``. That is a keep-despite-prune override, not a
+    hand-placed beat, so it is neither drawn as "+" nor visited by the ``added`` pass.
+    """
+    default = set(int(i) for i in ch.meta.get("rpeaks_idx_default", []))
+    return [int(i) for i in ch.meta.get("rpeaks_idx_added", []) if int(i) not in default]
+
+
 #: Tag names bound to the digit keys 1 / 2 / 3.
 _TAG_KEYS = {"1": "reviewed", "2": "representative", "3": "interesting"}
 
@@ -324,7 +337,7 @@ def _build_rpeak_reviewer_class():
             """
             if self._nav == "added":
                 t = np.asarray(ch.t)
-                out = [(float(t[int(i)]), "added") for i in sorted(ch.meta.get("rpeaks_idx_added", []))]
+                out = [(float(t[int(i)]), "added") for i in sorted(_placed(ch))]
             else:
                 out = list(ch.suspect_times())
             win = (ch.meta or {}).get("review_window")
@@ -473,7 +486,7 @@ def _build_rpeak_reviewer_class():
             y = np.asarray(ch()).reshape(-1)
             ax_raw.plot(t, y, lw=0.5, color="0.4")
             default = np.asarray(ch.meta.get("rpeaks_idx_default", []), dtype=int)
-            added = np.asarray(ch.meta.get("rpeaks_idx_added", []), dtype=int)
+            added = np.asarray(_placed(ch), dtype=int)   # hand-placed only (see _placed)
             removed = np.asarray(ch.meta.get("rpeaks_idx_removed", []), dtype=int)
             if default.size:
                 ax_raw.plot(t[default], y[default], "*", color="darkorange", ms=6, label="default")

@@ -134,6 +134,14 @@ To regenerate this snapshot::
 
 ## Known limitations carrying forward
 
+- **The double-peak auto-prune deletes real premature beats.** `find_rpeaks_pn` drops the
+  smaller of two peaks closer than `60/hr_max` s (300 ms at 200 bpm). A premature beat's short
+  interval can be under 300 ms (gib01 (13, 3) @ 148.641 s: 295 ms, a confirmed ectopic), so the
+  prune removes a real beat, and keeping it costs a permanent `added` override. Double
+  detections within one QRS sit much closer (< ~150 ms). Consider pruning on a tighter gap or on
+  morphology. Changing the default re-baselines every saved decision, so do it with a
+  migration check like gib01's (2026-10-01).
+
 - **Per-`Signal` `meta` on very-old pickles is unrecoverable.** Pickles
   produced before sensor metadata moved into `pysampled.Data.meta`
   (i.e. ones where every `Signal` has `meta == {}`) lose

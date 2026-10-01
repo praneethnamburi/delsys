@@ -234,3 +234,22 @@ def test_remove_clears_the_ectopic_label_of_the_removed_beat(tmp_path):
     r._remove_rpeak(_Ev(float(ch.t[beat])))
     assert beat not in ch._get_rpeaks_from_meta()
     assert beat not in ch.meta["rpeaks_idx_ectopic"]
+
+
+def test_restored_autoprune_is_not_drawn_or_visited_as_added(tmp_path):
+    """In both default and added = a keep-despite-prune override: drawn as a plain detected
+    beat (no '+') and skipped by nav='added'; a genuinely placed beat still is."""
+    ekg = _synth_ekg()
+    ekg.meta["source"] = str(tmp_path / "Trial_1.h5")
+    from delsys import rpeak_review
+
+    r = rpeak_review.launch([ekg], nav="added")
+    ch = r._cur()
+    restored = ch.meta["rpeaks_idx_default"][7]
+    placed = int(round(20.37 * ch.sr))
+    ch.meta["rpeaks_idx_added"] = [restored, placed]
+    r.update()
+    plus = [ln for ln in r._ax_raw.get_lines() if ln.get_label() == "added"][0]
+    assert list(np.round(plus.get_xdata(), 3)) == [round(float(ch.t[placed]), 3)]
+    assert [round(t, 3) for t, _ in r._targets(ch)] == [round(float(ch.t[placed]), 3)]
+    assert restored in ch._get_rpeaks_from_meta()          # the beat itself is kept

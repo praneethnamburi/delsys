@@ -124,9 +124,13 @@ def _build_rpeak_reviewer_class():
             from delsys import _rpeaks
 
             try:
-                return _rpeaks.ekg_channel_address(ch)
+                addr = _rpeaks.ekg_channel_address(ch)
             except Exception:  # noqa: BLE001 — best-effort label
-                return "EKG"
+                addr = "EKG"
+            # Channels from DIFFERENT files can share a sensor address, which made every entry in
+            # the dropdown identical; a caller-supplied meta["review_label"] says which is which.
+            lbl = (ch.meta or {}).get("review_label")
+            return f"{lbl}  |  {addr}" if lbl else addr
 
         def _cur(self):
             """The EKG channel currently browsed."""
